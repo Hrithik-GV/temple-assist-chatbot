@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = 5000
     MONGODB_CONNECT_TIMEOUT_MS: int = 5000
 
+    # Embedding & Vector Search Configuration
+    EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
+    EMBEDDING_DIMENSION: int = 384
+    VECTOR_SEARCH_INDEX_NAME: str = "vector_index"
+    DEFAULT_TOP_K: int = 5
+    NUM_CANDIDATES_MULTIPLIER: int = 10
+
     # CORS
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:3000",

@@ -11,6 +11,7 @@ from app.models.knowledge import (
     DocumentStatus,
     KnowledgeChunk,
     KnowledgeDocument,
+    VectorSearchResult,
 )
 from app.models.message import Message, MessageRole
 from app.models.temple import Temple, TempleContact, TempleLocation, TempleTimings
@@ -33,6 +34,7 @@ __all__ = [
     # Knowledge
     "KnowledgeDocument",
     "KnowledgeChunk",
+    "VectorSearchResult",
     "DocumentStatus",
     "DocumentSourceType",
     # Admin
