@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.database import mongodb
 from app.core.errors import register_error_handlers
 from app.core.logging import get_logger, setup_logging
 
@@ -27,10 +28,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     logger.info("Allowed CORS Origins: %s", settings.CORS_ORIGINS)
 
+    # Initialize MongoDB Atlas connection
+    await mongodb.connect()
+
     yield
 
     # Shutdown
     logger.info("Shutting down %s", settings.PROJECT_NAME)
+    await mongodb.disconnect()
 
 
 def create_app() -> FastAPI:

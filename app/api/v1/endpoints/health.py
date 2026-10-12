@@ -1,7 +1,8 @@
 """Health check and diagnostic API endpoints."""
 
-from typing import Dict
+from typing import Any, Dict
 from fastapi import APIRouter, status
+from app.core.database import mongodb
 from app.models.health import HealthResponse
 from app.services.health_service import health_service
 
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/health", tags=["Health"])
     description="Returns the operational status, application version, environment, and dependencies health.",
 )
 async def get_health() -> HealthResponse:
-    """Return comprehensive system health information."""
+    """Return comprehensive system health information including MongoDB status."""
     return await health_service.check_health()
 
 
@@ -37,6 +38,9 @@ async def get_liveness() -> Dict[str, str]:
     summary="Readiness Probe",
     description="Kubernetes / Docker readiness probe to check if the app is ready to accept traffic.",
 )
-async def get_readiness() -> Dict[str, str]:
-    """Return readiness status."""
-    return {"status": "ready"}
+async def get_readiness() -> Dict[str, Any]:
+    """Return readiness status with database readiness flag."""
+    return {
+        "status": "ready",
+        "database": "connected" if mongodb.is_connected else "disconnected",
+    }

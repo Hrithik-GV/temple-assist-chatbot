@@ -16,16 +16,17 @@ def test_root_endpoint(client: TestClient) -> None:
 
 
 def test_health_endpoint(client: TestClient) -> None:
-    """Test that /api/v1/health returns healthy status and standard fields."""
+    """Test that /api/v1/health returns healthy or degraded status, standard fields, and mongodb component."""
     response = client.get("/api/v1/health")
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
-    assert data["status"] == "healthy"
+    assert data["status"] in ("healthy", "degraded")
     assert "app_name" in data
     assert "version" in data
     assert "environment" in data
     assert "timestamp" in data
     assert isinstance(data["components"], dict)
+    assert "mongodb" in data["components"]
 
 
 def test_liveness_endpoint(client: TestClient) -> None:
@@ -37,11 +38,12 @@ def test_liveness_endpoint(client: TestClient) -> None:
 
 
 def test_readiness_endpoint(client: TestClient) -> None:
-    """Test that /api/v1/health/ready returns ready status."""
+    """Test that /api/v1/health/ready returns ready status and database state."""
     response = client.get("/api/v1/health/ready")
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
-    assert data == {"status": "ready"}
+    assert data["status"] == "ready"
+    assert "database" in data
 
 
 def test_error_handling_not_found(client: TestClient) -> None:

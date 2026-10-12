@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # MongoDB Atlas Configuration
+    MONGODB_URI: str = "mongodb://localhost:27017"
+    MONGODB_DB_NAME: str = "temple_chatbot_db"
+    MONGODB_MIN_POOL_SIZE: int = 10
+    MONGODB_MAX_POOL_SIZE: int = 50
+    MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = 5000
+    MONGODB_CONNECT_TIMEOUT_MS: int = 5000
+
     # CORS
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:3000",

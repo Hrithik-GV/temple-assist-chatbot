@@ -1,7 +1,8 @@
-"""Service for checking application health and readiness."""
+"""Service for checking application health, database connectivity, and readiness."""
 
 from typing import Dict
 from app.core.config import settings
+from app.core.database import mongodb
 from app.models.health import ComponentHealth, HealthResponse, HealthStatus
 from app.services.base import BaseService
 from app.utils.helpers import get_utc_now
@@ -14,17 +15,22 @@ class HealthService(BaseService):
         super().__init__()
 
     async def check_health(self) -> HealthResponse:
-        """Evaluate application health.
-
-        In future phases, this will check connections to MongoDB, Vector Store, etc.
-        """
+        """Evaluate application health including MongoDB Atlas connectivity."""
         self.logger.debug("Executing system health check")
 
-        # Future extensions can append checks for MongoDB, Qdrant/Chroma, etc.
         components: Dict[str, ComponentHealth] = {}
 
+        # 1. MongoDB connectivity check
+        mongo_health = await mongodb.check_health()
+        components["mongodb"] = mongo_health
+
+        # Compute overall system health status
+        overall_status = HealthStatus.HEALTHY
+        if mongo_health.status != HealthStatus.HEALTHY:
+            overall_status = HealthStatus.DEGRADED
+
         return HealthResponse(
-            status=HealthStatus.HEALTHY,
+            status=overall_status,
             app_name=settings.PROJECT_NAME,
             version=settings.VERSION,
             environment=settings.ENVIRONMENT,
