@@ -1,22 +1,22 @@
 # Temple Chatbot Platform - Backend
 
-Backend API foundation for the Temple Chatbot Platform built with **Python 3.13+**, **FastAPI**, **MongoDB Atlas**, and **MongoDB Atlas Vector Search** (using the official Motor / PyMongo asynchronous driver and FastEmbed local ONNX embedding models).
+Backend API foundation for the Temple Chatbot Platform built with **Python 3.13+**, **FastAPI**, **MongoDB Atlas**, **MongoDB Atlas Vector Search**, and a **Document Ingestion Pipeline** supporting PDF, DOCX, and TXT documents.
 
-This repository contains the production-ready backend architecture designed for multi-tenancy across multiple temples, scalable database integration, and high-performance vector search retrieval for the RAG pipeline.
+This repository contains the production-ready backend architecture designed for multi-tenancy across multiple temples, scalable database integration, document ingestion, and high-performance vector search retrieval for the RAG pipeline.
 
 ---
 
 ## Architecture & Directory Structure
 
-The backend follows a clean, decoupled modular layout separating routing, business logic, domain models, database management, embeddings, and core utilities:
+The backend follows a clean, decoupled modular layout separating routing, business logic, domain models, database management, ingestion, embeddings, and utilities:
 
 ```text
 temple-assist-chatbot/
-├── .env.example              # Environment variables template (includes MongoDB & Vector Search)
+├── .env.example              # Environment variables template (includes MongoDB, Vector Search, Ingestion)
 ├── .env                      # Local environment configuration (git-ignored)
 ├── .gitignore                # Git ignore configuration
 ├── pyproject.toml            # Project metadata and pytest configuration
-├── requirements.txt          # Python dependencies (FastAPI, Motor, FastEmbed, PyMongo, Pydantic, etc.)
+├── requirements.txt          # Python dependencies (FastAPI, Motor, FastEmbed, PyPDF, python-docx, etc.)
 ├── README.md                 # Project documentation
 ├── app/
 │   ├── __init__.py           # Application package root
@@ -42,7 +42,7 @@ temple-assist-chatbot/
 │   │   ├── common.py         # Generic response & error schemas
 │   │   ├── health.py         # Health check schemas & component models
 │   │   ├── temple.py         # Temple profile, timings, location, and contact models
-│   │   ├── knowledge.py      # KnowledgeDocument, KnowledgeChunk (embeddings, metadata), and VectorSearchResult
+│   │   ├── knowledge.py      # KnowledgeDocument, KnowledgeChunk, VectorSearchResult, IngestionResult
 │   │   ├── admin.py          # Admin model with role-based and temple scoping
 │   │   ├── conversation.py   # Multi-turn chat session model (templeId-scoped)
 │   │   └── message.py        # Dialogue message history model (templeId-scoped)
@@ -52,17 +52,124 @@ temple-assist-chatbot/
 │   │   ├── database_service.py   # Reusable multi-temple repository service
 │   │   ├── embedding_service.py  # Swappable embedding provider (FastEmbed, Mock, etc.)
 │   │   ├── health_service.py     # Health inspection & MongoDB diagnostic service
+│   │   ├── ingestion_service.py  # Document ingestion pipeline (PDF, DOCX, TXT)
 │   │   └── vector_search_service.py # Isolated MongoDB Atlas Vector Search service
 │   └── utils/                # Utility helpers & shared functions
 │       ├── __init__.py
-│       └── helpers.py        # Date/time helpers and utilities
+│       ├── helpers.py        # Date/time helpers and utilities
+│       ├── text_cleaner.py   # Text normalization and formatting noise cleaner
+│       ├── text_chunker.py   # Boundary-aware semantic chunker with token counter
+│       └── text_extractor.py # Document parsers for PDF, DOCX, and TXT
 └── tests/                    # Automated test suite
     ├── __init__.py
     ├── conftest.py           # Pytest fixtures and TestClient
     ├── test_database.py      # MongoDB models, manager, and multi-tenancy tests
     ├── test_health.py        # Health, probe, and database readiness tests
+    ├── test_ingestion.py     # Document extraction, cleaning, chunking, and ingestion pipeline tests
     └── test_vector_search.py # Embedding generation, chunk schema, and vector search tests
 ```
+
+---
+
+## Document Ingestion Pipeline
+
+The ingestion service converts temple knowledge documents (PDF, DOCX, TXT) into searchable, embedded vector chunks in MongoDB:
+
+```text
+Document (PDF / DOCX / TXT)
+  ├── 1. Text Extraction      (Extract text, table cells, pages via pypdf / python-docx)
+  ├── 2. Text Cleaning        (NFKC Unicode normalize, strip control chars & formatting noise)
+  ├── 3. Deduplication        (Compute SHA-256 fingerprint; skip if unchanged)
+  ├── 4. Document Record      (Persist KnowledgeDocument record in MongoDB)
+  ├── 5. Semantic Chunking    (Configurable chunk_size & overlap along natural boundaries)
+  ├── 6. Dense Embeddings     (Generate 384-dim embeddings via FastEmbed)
+  └── 7. Vector Storage       (Persist KnowledgeChunk records into knowledge_chunks)
+```
+
+### Supported Document Types
+
+| Format | Extension | Parser | Features Supported |
+| :--- | :--- | :--- | :--- |
+| **PDF** | `.pdf` | `pypdf` | Multi-page text extraction, whitespace preservation, encryption detection |
+| **DOCX** | `.docx`, `.doc` | `python-docx` | Headings, body paragraphs, and table cell extraction |
+| **TXT** | `.txt`, `.md`, `.text` | Built-in | Automatic encoding detection (`utf-8`, `utf-16`, `latin-1`, `cp1252`) |
+
+### Ingestion Usage Examples
+
+#### 1. Ingesting a Document File (PDF / DOCX / TXT)
+
+```python
+from pathlib import Path
+from app.services.ingestion_service import ingestion_service
+
+result = await ingestion_service.ingest_file(
+    file_path=Path("docs/tirumala_darshan_guidelines.pdf"),
+    temple_id="temple_tirupati",
+    title="Tirumala Darshan Guidelines",
+    category="darshan",
+    metadata={"uploadedBy": "admin_1", "official": True},
+)
+
+print(f"Document ID: {result.document_id}")
+print(f"Chunks Indexed: {result.chunks_created}")
+print(f"Status: {result.status}")  # DocumentStatus.PROCESSED
+print(f"Content Hash: {result.content_hash}")
+```
+
+#### 2. Ingesting Raw Text (FAQs, Manual Guidelines)
+
+```python
+from app.services.ingestion_service import ingestion_service
+
+faq_text = """
+Q: What are the temple morning darshan hours?
+A: General darshan is open from 6:00 AM to 12:30 PM.
+
+Q: Is mobile phone allowed inside the sanctum?
+A: No, electronic devices must be deposited at the cloak room.
+"""
+
+result = await ingestion_service.ingest_text(
+    text=faq_text,
+    temple_id="temple_tirupati",
+    title="General Darshan FAQs",
+    category="faq",
+    source="manual_faq_entry",
+)
+```
+
+#### 3. Ingesting Raw File Bytes (e.g. from File Uploads)
+
+```python
+from app.services.ingestion_service import ingestion_service
+from app.models.knowledge import DocumentSourceType
+
+result = await ingestion_service.ingest_document(
+    temple_id="temple_madurai",
+    source=file_bytes,
+    title="Meenakshi Temple Architecture",
+    source_type=DocumentSourceType.DOCX,
+    filename="meenakshi_architecture.docx",
+    category="history",
+    chunk_size=500,
+    chunk_overlap=50,
+    force_reingest=False,  # Set True to overwrite existing duplicate
+)
+```
+
+### Deduplication & Idempotency
+
+- Every document computes a SHA-256 hash of its normalized text.
+- If a document with identical `templeId` and `contentHash` already exists:
+  - When `force_reingest=False`: skips ingestion and returns `is_duplicate=True` with existing document metadata, saving computation and vector storage costs.
+  - When `force_reingest=True`: cleans up previous chunks and safely re-indexes.
+
+### Failure Handling & Rollback
+
+- If any step fails during ingestion (e.g., embedding model failure or database disconnection):
+  1. Any partial/orphaned chunks stored for this document are automatically purged.
+  2. The parent `KnowledgeDocument` status is set to `FAILED` with error details captured in `metadata["error"]`.
+  3. A descriptive `AppException` is raised to inform the caller.
 
 ---
 
@@ -74,12 +181,10 @@ The platform uses **MongoDB Atlas Vector Search** as the semantic retrieval engi
 
 - **Model**: `BAAI/bge-small-en-v1.5` (or `sentence-transformers/all-MiniLM-L6-v2`)
 - **Dimensions**: `384`
-- **Execution**: Runs locally via FastEmbed ONNX runtime without requiring heavy GPU or PyTorch installations.
-- **Swappable Architecture**: The `EmbeddingService` defines a `BaseEmbeddingProvider` interface, allowing hot-swapping providers (e.g. `FastEmbedProvider`, `MockEmbeddingProvider`, or future cloud providers like OpenAI/Voyage/Cohere) without changing business logic.
+- **Execution**: Runs locally via FastEmbed ONNX runtime without requiring GPU or PyTorch installations.
+- **Swappable Architecture**: The `EmbeddingService` defines a `BaseEmbeddingProvider` interface, allowing hot-swapping providers (e.g. `FastEmbedProvider`, `MockEmbeddingProvider`, or cloud providers) without modifying pipeline code.
 
 ### 2. Knowledge Chunks Schema (`knowledge_chunks`)
-
-Every chunk stored in the database adheres to the following multi-temple schema:
 
 ```json
 {
@@ -89,13 +194,13 @@ Every chunk stored in the database adheres to the following multi-temple schema:
   "content": "Suprabhata Seva is performed early in the morning to awaken the deity.",
   "embedding": [0.0125, -0.0432, 0.0891, ...],
   "title": "Daily Seva Schedule",
-  "source": "https://tirumala.org/rituals",
+  "source": "tirumala_guidelines.pdf",
   "category": "rituals",
   "chunkIndex": 0,
   "tokenCount": 14,
   "metadata": {
-    "section": "Morning Sevas",
-    "verified": true
+    "contentLength": 75,
+    "official": true
   },
   "createdAt": "2026-10-13T01:00:00Z",
   "updatedAt": "2026-10-13T01:00:00Z"
@@ -104,9 +209,7 @@ Every chunk stored in the database adheres to the following multi-temple schema:
 
 ### 3. MongoDB Atlas Vector Search Index Configuration
 
-To enable vector search in MongoDB Atlas, create a Search Index on the `knowledge_chunks` collection using the **JSON Editor**:
-
-#### Index Definition JSON:
+Create a Search Index on the `knowledge_chunks` collection using the **JSON Editor**:
 
 ```json
 {
@@ -129,54 +232,8 @@ To enable vector search in MongoDB Atlas, create a Search Index on the `knowledg
 }
 ```
 
-#### Step-by-Step Setup in Atlas UI:
-
-1. Log in to [MongoDB Atlas](https://cloud.mongodb.com/).
-2. Navigate to your cluster and click **Browse Collections**.
-3. Select your database (e.g., `temple_chatbot_db`) and click on the `knowledge_chunks` collection.
-4. Select the **Atlas Search** tab and click **Create Search Index**.
-5. Choose **Atlas Vector Search** > **JSON Editor** and click **Next**.
-6. Set the **Index Name** to `vector_index` (must match `VECTOR_SEARCH_INDEX_NAME` in `.env`).
-7. Paste the JSON definition above.
-8. Click **Next** and then **Create Search Index**. The index will build in a few seconds.
-
-### 4. Vector Search Pipeline & Fallback
-
-The `VectorSearchService` implements the native Atlas `$vectorSearch` aggregation stage:
-
-```python
-pipeline = [
-    {
-        "$vectorSearch": {
-            "index": "vector_index",
-            "path": "embedding",
-            "queryVector": query_vector,
-            "numCandidates": limit * 10,
-            "limit": limit,
-            "filter": {
-                "templeId": { "$eq": temple_id }
-            }
-        }
-    },
-    {
-        "$project": {
-            "_id": 1,
-            "templeId": 1,
-            "documentId": 1,
-            "content": 1,
-            "title": 1,
-            "source": 1,
-            "category": 1,
-            "metadata": 1,
-            "score": { "$meta": "vectorSearchScore" }
-        }
-    }
-]
-```
-
-- **Multi-Tenant Isolation**: The query is strictly filtered by `templeId` at the vector index level so no cross-temple data leakage occurs.
-- **Configurable Results**: `top_k` controls the number of returned chunks (capped safely at 100).
-- **Local Fallback**: If running on a local MongoDB deployment without Atlas Search, `VectorSearchService` automatically falls back to in-memory cosine similarity search so local developers and automated test suites can execute end-to-end without an active Atlas Search cluster.
+- **Index Name**: `vector_index` (configured via `VECTOR_SEARCH_INDEX_NAME`).
+- **Pre-filtering**: `templeId` is indexed as `filter` to enforce zero-leakage multi-tenancy.
 
 ---
 
@@ -185,7 +242,7 @@ pipeline = [
 | Collection | Model | Description | Mandatory Scope |
 | :--- | :--- | :--- | :--- |
 | `temples` | `Temple` | Distinct temple identity, location, darshan timings, languages, active status | Unique `slug` |
-| `knowledge_documents` | `KnowledgeDocument` | Ingested source documents (website pages, FAQs, PDFs, texts) | `templeId` |
+| `knowledge_documents` | `KnowledgeDocument` | Ingested source documents (PDF, DOCX, TXT) with content hash & status | `templeId`, `contentHash` |
 | `knowledge_chunks` | `KnowledgeChunk` | Segmented text chunks with dense vector embeddings for RAG retrieval | `templeId`, `documentId` |
 | `admins` | `Admin` | Administrative accounts (superadmin across platform or temple-specific admin) | Optional `templeId` |
 | `conversations` | `Conversation` | Multi-turn user chat sessions associated with a specific temple | `templeId`, `sessionId` |
@@ -247,6 +304,8 @@ cp .env.example .env
 | `EMBEDDING_DIMENSION` | Dimension of embedding vectors | `384` |
 | `VECTOR_SEARCH_INDEX_NAME` | Atlas Vector Search index identifier | `vector_index` |
 | `DEFAULT_TOP_K` | Default number of retrieved search results | `5` |
+| `DEFAULT_CHUNK_SIZE` | Default character length per knowledge chunk | `500` |
+| `DEFAULT_CHUNK_OVERLAP` | Default character overlap between chunks | `50` |
 
 ---
 
@@ -270,20 +329,23 @@ Execute the automated test suite with `pytest`:
 pytest -v
 ```
 
-All 31 unit and integration tests cover:
+All 47 unit and integration tests cover:
 - FastAPI lifecycle and health check diagnostic endpoints.
 - Multi-temple MongoDB data models, indexes, and tenancy scoping.
+- Document text extraction for PDF, DOCX, and TXT files.
+- Text normalization, control-character stripping, and whitespace collapse.
+- Semantic boundary-aware chunking and token counting.
+- SHA-256 content deduplication and duplicate skipping.
+- End-to-end document ingestion pipeline and vector persistence.
+- Rollback of partial chunks and FAILED status marking upon ingestion error.
 - Local FastEmbed dense vector generation (384 dimensions).
 - Swappable embedding provider interface and mock providers.
-- Knowledge chunk embedding generation and batch persistence.
-- Atlas `$vectorSearch` aggregation pipeline construction.
-- Semantic similarity search filtering by `templeId` and `category`.
-- In-memory cosine similarity ranking fallback for offline development.
+- Atlas `$vectorSearch` aggregation pipeline construction and multi-tenant filtering.
 
 ---
 
 ## Roadmap (Next Phases)
 
-- **Phase 3: Web Ingestion Engine**: Website crawler and HTML parser for automated document ingestion into `knowledge_documents` and chunking.
+- **Phase 3: Web Ingestion Engine**: Website crawler and HTML parser for automated document ingestion from temple URLs.
 - **Phase 4: RAG Pipeline Integration**: Context assembling, prompt formatting, and grounding citations.
 - **Phase 5: Conversational Chat API**: Multi-turn dialogue management, streaming responses, and telemetry.

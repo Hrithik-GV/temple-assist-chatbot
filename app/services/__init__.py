@@ -10,6 +10,7 @@ from app.services.embedding_service import (
     embedding_service,
 )
 from app.services.health_service import HealthService, health_service
+from app.services.ingestion_service import IngestionService, ingestion_service
 from app.services.vector_search_service import VectorSearchService, vector_search_service
 
 __all__ = [
@@ -25,4 +26,6 @@ __all__ = [
     "embedding_service",
     "VectorSearchService",
     "vector_search_service",
+    "IngestionService",
+    "ingestion_service",
 ]

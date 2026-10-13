@@ -20,6 +20,7 @@ class DocumentSourceType(str, Enum):
 
     WEBSITE = "website"
     PDF = "pdf"
+    DOCX = "docx"
     FAQ = "faq"
     TEXT = "text"
     MANUAL = "manual"
@@ -40,10 +41,24 @@ class KnowledgeDocument(MongoBaseModel):
         alias="sourceType",
         description="Origin source type",
     )
+    source: Optional[str] = Field(
+        default=None,
+        description="Original file path, filename, or source identifier",
+    )
     source_url: Optional[str] = Field(
         default=None,
         alias="sourceUrl",
         description="Original web URL or file URL if applicable",
+    )
+    category: Optional[str] = Field(
+        default=None,
+        description="Classification category (e.g. 'history', 'rituals', 'timings')",
+    )
+    content_hash: Optional[str] = Field(
+        default=None,
+        alias="contentHash",
+        serialization_alias="contentHash",
+        description="SHA-256 hash of cleaned text for deduplication",
     )
     raw_content: Optional[str] = Field(
         default=None,
@@ -142,3 +157,18 @@ class VectorSearchResult(BaseModel):
 
     chunk: KnowledgeChunk = Field(..., description="Retrieved knowledge chunk")
     score: float = Field(..., description="Cosine similarity score (0.0 to 1.0)")
+
+
+class IngestionResult(BaseModel):
+    """Result report returned after processing an ingested document."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    document_id: str = Field(..., alias="documentId", description="ID of the created or updated KnowledgeDocument")
+    temple_id: str = Field(..., alias="templeId", description="Associated temple ID")
+    title: str = Field(..., description="Document title")
+    status: DocumentStatus = Field(..., description="Final processing status")
+    chunks_created: int = Field(default=0, alias="chunksCreated", description="Number of vector chunks generated")
+    is_duplicate: bool = Field(default=False, alias="isDuplicate", description="Whether document was skipped due to duplicate hash")
+    message: str = Field(default="Ingestion completed successfully.", description="Status narrative or error explanation")
+    content_hash: Optional[str] = Field(default=None, alias="contentHash", description="SHA-256 fingerprint of the cleaned content")

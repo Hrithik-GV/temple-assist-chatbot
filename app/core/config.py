@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     DEFAULT_TOP_K: int = 5
     NUM_CANDIDATES_MULTIPLIER: int = 10
 
+    # Ingestion Configuration
+    DEFAULT_CHUNK_SIZE: int = 500
+    DEFAULT_CHUNK_OVERLAP: int = 50
+
     # CORS
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:3000",

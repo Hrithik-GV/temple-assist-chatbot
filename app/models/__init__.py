@@ -9,6 +9,7 @@ from app.models.health import ComponentHealth, HealthResponse, HealthStatus
 from app.models.knowledge import (
     DocumentSourceType,
     DocumentStatus,
+    IngestionResult,
     KnowledgeChunk,
     KnowledgeDocument,
     VectorSearchResult,
@@ -35,6 +36,7 @@ __all__ = [
     "KnowledgeDocument",
     "KnowledgeChunk",
     "VectorSearchResult",
+    "IngestionResult",
     "DocumentStatus",
     "DocumentSourceType",
     # Admin

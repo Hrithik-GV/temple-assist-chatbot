@@ -156,11 +156,12 @@ class MongoDBManager:
             idx_active = await temples_col.create_index("isActive", background=True)
             results[Collections.TEMPLES] = [idx_slug, idx_active]
 
-            # 2. Knowledge Documents: templeId + createdAt
+            # 2. Knowledge Documents: templeId + createdAt, templeId + contentHash
             docs_col = self.db[Collections.KNOWLEDGE_DOCUMENTS]
             idx_doc_temple = await docs_col.create_index([("templeId", 1), ("createdAt", -1)], background=True)
             idx_doc_status = await docs_col.create_index([("templeId", 1), ("status", 1)], background=True)
-            results[Collections.KNOWLEDGE_DOCUMENTS] = [idx_doc_temple, idx_doc_status]
+            idx_doc_hash = await docs_col.create_index([("templeId", 1), ("contentHash", 1)], background=True)
+            results[Collections.KNOWLEDGE_DOCUMENTS] = [idx_doc_temple, idx_doc_status, idx_doc_hash]
 
             # 3. Knowledge Chunks: templeId + documentId + chunkIndex
             chunks_col = self.db[Collections.KNOWLEDGE_CHUNKS]
