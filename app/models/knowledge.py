@@ -172,3 +172,32 @@ class IngestionResult(BaseModel):
     is_duplicate: bool = Field(default=False, alias="isDuplicate", description="Whether document was skipped due to duplicate hash")
     message: str = Field(default="Ingestion completed successfully.", description="Status narrative or error explanation")
     content_hash: Optional[str] = Field(default=None, alias="contentHash", description="SHA-256 fingerprint of the cleaned content")
+
+
+class CrawlPageResult(BaseModel):
+    """Result of crawling and ingesting an individual web page."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    url: str = Field(..., description="Target page URL")
+    title: str = Field(default="", description="Extracted page title")
+    status: str = Field(..., description="Outcome: ingested, skipped_duplicate, empty, or failed")
+    chunks_created: int = Field(default=0, alias="chunksCreated", description="Number of vector chunks created")
+    document_id: Optional[str] = Field(default=None, alias="documentId", description="ID of KnowledgeDocument in MongoDB")
+    error: Optional[str] = Field(default=None, description="Error message if crawling or ingestion failed")
+
+
+class CrawlSummary(BaseModel):
+    """Overall summary of a website crawl run for a temple."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    temple_id: str = Field(..., alias="templeId", description="Associated temple ID")
+    start_url: str = Field(..., alias="startUrl", description="Initial entry URL of the crawl")
+    total_pages_visited: int = Field(default=0, alias="totalPagesVisited", description="Total pages visited by Playwright")
+    pages_ingested: int = Field(default=0, alias="pagesIngested", description="Pages successfully cleaned and indexed")
+    pages_skipped: int = Field(default=0, alias="pagesSkipped", description="Pages skipped (empty content or duplicates)")
+    pages_failed: int = Field(default=0, alias="pagesFailed", description="Pages that failed with errors or timeouts")
+    total_chunks_created: int = Field(default=0, alias="totalChunksCreated", description="Total vector chunks generated")
+    duration_seconds: float = Field(default=0.0, alias="durationSeconds", description="Total crawl duration in seconds")
+    page_results: List[CrawlPageResult] = Field(default_factory=list, alias="pageResults", description="Individual page crawl results")

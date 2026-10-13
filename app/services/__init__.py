@@ -9,6 +9,7 @@ from app.services.embedding_service import (
     MockEmbeddingProvider,
     embedding_service,
 )
+from app.services.crawler_service import WebsiteCrawlerService, crawler_service
 from app.services.health_service import HealthService, health_service
 from app.services.ingestion_service import IngestionService, ingestion_service
 from app.services.vector_search_service import VectorSearchService, vector_search_service
@@ -28,4 +29,6 @@ __all__ = [
     "vector_search_service",
     "IngestionService",
     "ingestion_service",
+    "WebsiteCrawlerService",
+    "crawler_service",
 ]

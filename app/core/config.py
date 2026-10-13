@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     DEFAULT_CHUNK_SIZE: int = 500
     DEFAULT_CHUNK_OVERLAP: int = 50
 
+    # Crawler Configuration
+    CRAWLER_MAX_PAGES: int = 15
+    CRAWLER_MAX_DEPTH: int = 3
+    CRAWLER_PAGE_TIMEOUT_MS: int = 30000
+    CRAWLER_WAIT_AFTER_LOAD_MS: int = 1000
+    CRAWLER_USER_AGENT: str = "TempleAssistCrawler/1.0"
+
     # CORS
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:3000",

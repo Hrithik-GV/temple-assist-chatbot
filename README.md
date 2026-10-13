@@ -49,6 +49,7 @@ temple-assist-chatbot/
 │   ├── services/             # Business logic service layer
 │   │   ├── __init__.py
 │   │   ├── base.py           # Abstract base service class
+│   │   ├── crawler_service.py    # Playwright website crawler & content extractor
 │   │   ├── database_service.py   # Reusable multi-temple repository service
 │   │   ├── embedding_service.py  # Swappable embedding provider (FastEmbed, Mock, etc.)
 │   │   ├── health_service.py     # Health inspection & MongoDB diagnostic service
@@ -57,15 +58,18 @@ temple-assist-chatbot/
 │   └── utils/                # Utility helpers & shared functions
 │       ├── __init__.py
 │       ├── helpers.py        # Date/time helpers and utilities
+│       ├── html_cleaner.py   # Rendered HTML noise stripping & link extractor
 │       ├── text_cleaner.py   # Text normalization and formatting noise cleaner
 │       ├── text_chunker.py   # Boundary-aware semantic chunker with token counter
-│       └── text_extractor.py # Document parsers for PDF, DOCX, and TXT
+│       ├── text_extractor.py # Document parsers for PDF, DOCX, and TXT
+│       └── url_utils.py      # URL normalization, domain validation & link filters
 └── tests/                    # Automated test suite
     ├── __init__.py
     ├── conftest.py           # Pytest fixtures and TestClient
+    ├── test_crawler.py       # URL filtering, HTML cleaning, and crawler tests
     ├── test_database.py      # MongoDB models, manager, and multi-tenancy tests
     ├── test_health.py        # Health, probe, and database readiness tests
-    ├── test_ingestion.py     # Document extraction, cleaning, chunking, and ingestion pipeline tests
+    ├── test_ingestion.py     # Document extraction, cleaning, chunking, and ingestion tests
     └── test_vector_search.py # Embedding generation, chunk schema, and vector search tests
 ```
 
@@ -170,6 +174,68 @@ result = await ingestion_service.ingest_document(
   1. Any partial/orphaned chunks stored for this document are automatically purged.
   2. The parent `KnowledgeDocument` status is set to `FAILED` with error details captured in `metadata["error"]`.
   3. A descriptive `AppException` is raised to inform the caller.
+
+---
+
+## Website Ingestion Engine (Playwright Crawler)
+
+Temple websites often use modern JavaScript frameworks (React, Vue, Next.js). The platform includes an automated web crawler built on **Playwright** and **BeautifulSoup** to extract client-side rendered textual knowledge without copying raw code or CSS:
+
+```text
+Starting URL (https://temple.org)
+  ├── 1. Playwright Browser Engine   (Executes JavaScript / renders React applications)
+  ├── 2. Noise & Boilerplate Removal (Strips nav, headers, footers, scripts, styles, cookie notices)
+  ├── 3. Internal Link Discovery     (Extracts & validates in-domain links, avoids loops)
+  ├── 4. Text Normalization          (Cleans text and extracts page title)
+  └── 5. RAG Pipeline Ingestion      (Deduplication → Chunking → FastEmbed → MongoDB)
+```
+
+### Key Features
+* **JavaScript / React Rendering**: Headless Chromium executes client-side scripts to extract visible content after dynamic hydration.
+* **Deep Content Cleaning**: Automatically strips boilerplate:
+  - Navigation menus (`<nav>`, `.navbar`, `[role="navigation"]`)
+  - Headers & footers (`<header>`, `<footer>`, repetitive copyright notices)
+  - Scripts, styles, `<noscript>`, SVG icons, and forms
+  - Cookie consent banners, GDPR notices, and modal overlays
+* **Domain Guardrails**:
+  - Restricts crawling strictly to the same domain (rejects external domains and social links).
+  - Skips media, binary assets, and PDFs (`.png`, `.jpg`, `.pdf`, `.mp4`, `.css`, etc.).
+  - Normalizes URLs (strips `#anchors`, drops `utm_*` marketing tags, unifies trailing slashes).
+  - Prevents infinite loops using visited/enqueued URL sets.
+* **Resilience & Timeout Handling**: Broken pages, 404s, or slow pages are logged and handled gracefully without halting the remaining crawl.
+* **Integrated with RAG Storage**: Extracted content directly feeds into the `IngestionService` and is tagged with the target `templeId`.
+
+### Prerequisites for Web Crawling
+Playwright requires the Chromium browser binary:
+```bash
+playwright install chromium
+```
+
+### Crawling Usage Example
+
+```python
+import asyncio
+from app.services.crawler_service import crawler_service
+
+async def main():
+    # Crawl a temple website and ingest its pages
+    summary = await crawler_service.crawl_temple_website(
+        temple_id="temple_somnath",
+        start_url="https://somnath.org",
+        max_pages=15,             # Maximum pages to visit (default: from settings)
+        max_depth=3,              # Max link hop depth from entry page
+        timeout_ms=30000,         # Per-page timeout in ms
+        category="website",       # Domain category tag
+        force_reingest=False,     # Skip unchanged pages via content hash
+    )
+
+    print(f"Crawl finished in {summary.duration_seconds}s:")
+    print(f"  Pages visited: {summary.total_pages_visited}")
+    print(f"  Pages ingested: {summary.pages_ingested}")
+    print(f"  Chunks created: {summary.total_chunks_created}")
+
+asyncio.run(main())
+```
 
 ---
 
@@ -306,6 +372,11 @@ cp .env.example .env
 | `DEFAULT_TOP_K` | Default number of retrieved search results | `5` |
 | `DEFAULT_CHUNK_SIZE` | Default character length per knowledge chunk | `500` |
 | `DEFAULT_CHUNK_OVERLAP` | Default character overlap between chunks | `50` |
+| `CRAWLER_MAX_PAGES` | Default max pages to crawl per website | `15` |
+| `CRAWLER_MAX_DEPTH` | Default max crawl depth from start URL | `3` |
+| `CRAWLER_PAGE_TIMEOUT_MS` | Per-page navigation timeout in milliseconds | `30000` |
+| `CRAWLER_WAIT_AFTER_LOAD_MS`| Wait time after load for dynamic JS/React render | `1000` |
+| `CRAWLER_USER_AGENT` | Custom User-Agent header for Playwright crawler | `TempleAssistCrawler/1.0` |
 
 ---
 
@@ -329,15 +400,19 @@ Execute the automated test suite with `pytest`:
 pytest -v
 ```
 
-All 47 unit and integration tests cover:
-- FastAPI lifecycle and health check diagnostic endpoints.
-- Multi-temple MongoDB data models, indexes, and tenancy scoping.
+All 63 unit and integration tests cover:
+- FastAPI lifecycle, CORS, and health check diagnostic endpoints.
+- Multi-temple MongoDB data models, compound indexes, and tenancy scoping.
 - Document text extraction for PDF, DOCX, and TXT files.
 - Text normalization, control-character stripping, and whitespace collapse.
 - Semantic boundary-aware chunking and token counting.
 - SHA-256 content deduplication and duplicate skipping.
 - End-to-end document ingestion pipeline and vector persistence.
 - Rollback of partial chunks and FAILED status marking upon ingestion error.
+- Playwright website crawler URL canonicalization and tracking tag removal.
+- Domain guardrails (staying within the same domain, rejecting external/social links).
+- Rendered HTML noise stripping (navigation, headers, footers, cookie banners, scripts, styles).
+- Graceful crawler error resilience across broken pages and HTTP 4xx/5xx responses.
 - Local FastEmbed dense vector generation (384 dimensions).
 - Swappable embedding provider interface and mock providers.
 - Atlas `$vectorSearch` aggregation pipeline construction and multi-tenant filtering.
@@ -346,6 +421,6 @@ All 47 unit and integration tests cover:
 
 ## Roadmap (Next Phases)
 
-- **Phase 3: Web Ingestion Engine**: Website crawler and HTML parser for automated document ingestion from temple URLs.
-- **Phase 4: RAG Pipeline Integration**: Context assembling, prompt formatting, and grounding citations.
-- **Phase 5: Conversational Chat API**: Multi-turn dialogue management, streaming responses, and telemetry.
+- **Phase 5: RAG Context Assembly & Prompt Formatting**: Context retrieval, relevance reranking, and citation grounding.
+- **Phase 6: Conversational Chat API**: Multi-turn dialogue management, streaming responses, and telemetry.
+- **Phase 7: Admin API & Authentication**: JWT authentication, temple admin management, and document upload endpoints.
