@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "text"  # "text" for human-readable or "json" for structured production logs
 
     # MongoDB Atlas Configuration
     MONGODB_URI: str = "mongodb://localhost:27017"
@@ -38,6 +39,8 @@ class Settings(BaseSettings):
     MONGODB_MAX_POOL_SIZE: int = 50
     MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = 5000
     MONGODB_CONNECT_TIMEOUT_MS: int = 5000
+    MONGODB_SOCKET_TIMEOUT_MS: int = 15000
+    MONGODB_MAX_IDLE_TIME_MS: int = 60000
 
     # Embedding & Vector Search Configuration
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
@@ -49,13 +52,17 @@ class Settings(BaseSettings):
     # Ingestion Configuration
     DEFAULT_CHUNK_SIZE: int = 500
     DEFAULT_CHUNK_OVERLAP: int = 50
+    MAX_UPLOAD_FILE_SIZE_BYTES: int = 25 * 1024 * 1024  # 25 MB max document size
 
     # Crawler Configuration
     CRAWLER_MAX_PAGES: int = 15
+    CRAWLER_MAX_ALLOWED_PAGES: int = 50  # Hard ceiling for single crawl job
     CRAWLER_MAX_DEPTH: int = 3
     CRAWLER_PAGE_TIMEOUT_MS: int = 30000
     CRAWLER_WAIT_AFTER_LOAD_MS: int = 1000
     CRAWLER_USER_AGENT: str = "TempleAssistCrawler/1.0"
+    CRAWLER_MAX_CONCURRENCY: int = 2  # Max concurrent crawl jobs
+    CRAWLER_TOTAL_TIMEOUT_SECONDS: int = 300  # 5 minutes max per crawl run
 
     # LLM & RAG Configuration
     LLM_PROVIDER: str = "gemini"  # "gemini", "openai", or "mock"
@@ -80,17 +87,22 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours default validity
 
-    # Rate Limiting Configuration (for public chat endpoint)
+    # Rate Limiting Configuration
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60
+    ADMIN_LOGIN_RATE_LIMIT_PER_MINUTE: int = 10
 
     # CORS & Public Widget Configuration
     CORS_ALLOW_ALL_ORIGINS: bool = True  # Allows embedding chat widget on any temple domain
+    CORS_ORIGIN_REGEX: Optional[str] = None
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8000",
     ]
+
+    # Security Headers
+    SECURE_HEADERS_ENABLED: bool = True
 
     @field_validator("CORS_ORIGINS")
     @classmethod
@@ -120,6 +132,31 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         """Check if application is running in development."""
         return self.ENVIRONMENT.lower() == "development"
+
+    def validate_production_configuration(self) -> List[str]:
+        """Validate critical environment configuration for production deployments.
+
+        Returns:
+            List[str]: List of validation errors/warnings (empty if fully compliant).
+        """
+        issues: List[str] = []
+
+        if self.is_production:
+            if self.DEBUG:
+                issues.append("DEBUG mode is active in production. Set DEBUG=false.")
+
+            if "change-in-production" in self.JWT_SECRET_KEY.lower() or len(self.JWT_SECRET_KEY) < 32:
+                issues.append("JWT_SECRET_KEY is using a weak or default secret. Provide a strong 32+ character key.")
+
+            if "localhost" in self.MONGODB_URI or "127.0.0.1" in self.MONGODB_URI:
+                issues.append("MONGODB_URI is pointing to localhost in production. Configure a MongoDB Atlas cluster URI.")
+
+            if self.LLM_PROVIDER == "gemini" and not self.GEMINI_API_KEY:
+                issues.append("GEMINI_API_KEY is not configured for production.")
+            elif self.LLM_PROVIDER == "openai" and not self.OPENAI_API_KEY:
+                issues.append("OPENAI_API_KEY is not configured for production.")
+
+        return issues
 
 
 settings = Settings()

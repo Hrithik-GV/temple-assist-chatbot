@@ -72,16 +72,21 @@ class WebsiteCrawlerService(BaseService):
             raise BadRequestException(f"Invalid starting URL or domain: {start_url}")
 
         limit_pages = max_pages if (max_pages is not None and max_pages > 0) else settings.CRAWLER_MAX_PAGES
+        max_allowed = getattr(settings, "CRAWLER_MAX_ALLOWED_PAGES", 50)
+        limit_pages = min(limit_pages, max_allowed)
+
         limit_depth = max_depth if (max_depth is not None and max_depth >= 0) else settings.CRAWLER_MAX_DEPTH
         nav_timeout = timeout_ms if (timeout_ms is not None and timeout_ms > 0) else settings.CRAWLER_PAGE_TIMEOUT_MS
         wait_ms = settings.CRAWLER_WAIT_AFTER_LOAD_MS
+        total_crawl_timeout = getattr(settings, "CRAWLER_TOTAL_TIMEOUT_SECONDS", 300)
 
         self.logger.info(
-            "Starting crawl for temple '%s' | Entry: %s | Domain: %s | MaxPages: %d | MaxDepth: %d",
+            "Starting crawl for temple '%s' | Entry: %s | Domain: %s | MaxPages: %d (capped at %d) | MaxDepth: %d",
             temple_id,
             normalized_start_url,
             base_domain,
             limit_pages,
+            max_allowed,
             limit_depth,
         )
 
@@ -96,77 +101,91 @@ class WebsiteCrawlerService(BaseService):
         pages_failed = 0
         total_chunks = 0
 
-        # 2. Launch Headless Playwright Browser
-        async with async_playwright() as p:
-            browser: Browser = await p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-            )
+        # Concurrency semaphore to throttle parallel browser processes
+        if not hasattr(self, "_crawl_semaphore"):
+            self._crawl_semaphore = asyncio.Semaphore(getattr(settings, "CRAWLER_MAX_CONCURRENCY", 2))
 
-            context: BrowserContext = await browser.new_context(
-                user_agent=settings.CRAWLER_USER_AGENT,
-                viewport={"width": 1280, "height": 800},
-            )
+        async with self._crawl_semaphore:
+            # 2. Launch Headless Playwright Browser
+            async with async_playwright() as p:
+                browser: Browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+                )
 
-            page: Page = await context.new_page()
+                context: BrowserContext = await browser.new_context(
+                    user_agent=settings.CRAWLER_USER_AGENT,
+                    viewport={"width": 1280, "height": 800},
+                )
 
-            # Optimize crawl speed: Block heavy binary media (images, media, fonts) while keeping JS/CSS/XHR
-            await page.route(
-                "**/*",
-                lambda route: route.abort() if route.request.resource_type in ["image", "media", "font"] else route.continue_(),
-            )
+                page: Page = await context.new_page()
 
-            try:
-                while queue and len(visited_urls) < limit_pages:
-                    current_url, current_depth = queue.popleft()
-                    if current_url in visited_urls:
-                        continue
+                # Optimize crawl speed: Block heavy binary media (images, media, fonts) while keeping JS/CSS/XHR
+                await page.route(
+                    "**/*",
+                    lambda route: route.abort() if route.request.resource_type in ["image", "media", "font"] else route.continue_(),
+                )
 
-                    visited_urls.add(current_url)
-                    page_index = len(visited_urls)
+                try:
+                    while queue and len(visited_urls) < limit_pages:
+                        # Check total crawl timeout
+                        if (time.time() - start_time) > total_crawl_timeout:
+                            self.logger.warning(
+                                "Crawl for temple '%s' reached total timeout limit of %ds. Concluding crawl.",
+                                temple_id,
+                                total_crawl_timeout,
+                            )
+                            break
 
-                    self.logger.info(
-                        "[%d/%d] Crawling page: %s (depth: %d)...",
-                        page_index,
-                        limit_pages,
-                        current_url,
-                        current_depth,
-                    )
+                        current_url, current_depth = queue.popleft()
+                        if current_url in visited_urls:
+                            continue
 
-                    crawl_res = await self._crawl_and_ingest_page(
-                        page=page,
-                        current_url=current_url,
-                        base_domain=base_domain,
-                        temple_id=temple_id,
-                        depth=current_depth,
-                        category=category,
-                        nav_timeout=nav_timeout,
-                        wait_ms=wait_ms,
-                        force_reingest=force_reingest,
-                    )
+                        visited_urls.add(current_url)
+                        page_index = len(visited_urls)
 
-                    page_results.append(crawl_res)
+                        self.logger.info(
+                            "[%d/%d] Crawling page: %s (depth: %d)...",
+                            page_index,
+                            limit_pages,
+                            current_url,
+                            current_depth,
+                        )
 
-                    if crawl_res.status == "ingested":
-                        pages_ingested += 1
-                        total_chunks += crawl_res.chunks_created
-                    elif crawl_res.status in ("skipped_duplicate", "empty"):
-                        pages_skipped += 1
-                    elif crawl_res.status == "failed":
-                        pages_failed += 1
+                        crawl_res = await self._crawl_and_ingest_page(
+                            page=page,
+                            current_url=current_url,
+                            base_domain=base_domain,
+                            temple_id=temple_id,
+                            depth=current_depth,
+                            category=category,
+                            nav_timeout=nav_timeout,
+                            wait_ms=wait_ms,
+                            force_reingest=force_reingest,
+                        )
 
-                    # Enqueue newly discovered internal links if within depth limit
-                    if current_depth < limit_depth and hasattr(crawl_res, "_discovered_links"):
-                        for link in crawl_res._discovered_links:
-                            if link not in visited_urls and link not in enqueued_urls:
-                                if len(enqueued_urls) < limit_pages * 2:  # Prevent unbounded memory queue
-                                    enqueued_urls.add(link)
-                                    queue.append((link, current_depth + 1))
-                                    self.logger.debug("Enqueued internal link: %s (depth: %d)", link, current_depth + 1)
+                        page_results.append(crawl_res)
 
-            finally:
-                await context.close()
-                await browser.close()
+                        if crawl_res.status == "ingested":
+                            pages_ingested += 1
+                            total_chunks += crawl_res.chunks_created
+                        elif crawl_res.status in ("skipped_duplicate", "empty"):
+                            pages_skipped += 1
+                        elif crawl_res.status == "failed":
+                            pages_failed += 1
+
+                        # Enqueue newly discovered internal links if within depth limit
+                        if current_depth < limit_depth and hasattr(crawl_res, "_discovered_links"):
+                            for link in crawl_res._discovered_links:
+                                if link not in visited_urls and link not in enqueued_urls:
+                                    if len(enqueued_urls) < limit_pages * 2:  # Prevent unbounded memory queue
+                                        enqueued_urls.add(link)
+                                        queue.append((link, current_depth + 1))
+                                        self.logger.debug("Enqueued internal link: %s (depth: %d)", link, current_depth + 1)
+
+                finally:
+                    await context.close()
+                    await browser.close()
 
         duration = round(time.time() - start_time, 2)
         self.logger.info(

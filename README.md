@@ -799,7 +799,7 @@ Execute the automated test suite with `pytest`:
 pytest -v
 ```
 
-All 137 unit and integration tests cover:
+All 144 unit and integration tests cover:
 - FastAPI lifecycle, CORS, and health check diagnostic endpoints.
 - Multi-temple MongoDB data models, compound indexes, and tenancy scoping.
 - Document text extraction for PDF, DOCX, and TXT files.
@@ -838,12 +838,87 @@ All 137 unit and integration tests cover:
 - Admin authentication login (`POST /api/v1/admin/auth/login`) and current profile (`GET /api/v1/admin/auth/me`).
 - Strict temple-level multi-tenant authorization (`RequireTempleAccess`): blocking cross-temple access with `403 Forbidden`.
 - Superadmin privileges vs temple-scoped admin role barriers.
-- Document upload, listing with filters (`sourceType`, `status`, `category`, `search`), and cascade deletion.
+- Document upload with maximum size guardrails (25MB), listing with filters, and cascade deletion.
 - Inspection of document metadata, indexed chunks, and single chunk retrieval.
 - Full FAQ lifecycle: Add, List, Get, Update (with vector re-indexing), and Delete.
 - Headless website crawling with crawl job tracking, duration, and status inspection (`/crawl/status`, `/crawl/{crawlId}`).
 - Querying unanswered devotee questions triggered by no-context fallbacks.
 - Comprehensive chatbot analytics (conversation counts, query volume, fallback rate, document sources, crawl stats).
+- Production hardening: security headers (`nosniff`, `DENY`, `HSTS`), root probe aliases (`/health`, `/live`, `/ready`), environment validation, and structured JSON logging.
+
+---
+
+## Production Deployment & Operations Guide
+
+### 1. Production Checklist
+Before launching in production, verify:
+* [x] `ENVIRONMENT="production"` and `DEBUG=false` in `.env`.
+* [x] `JWT_SECRET_KEY` set to a cryptographically secure 32+ character random string (`openssl rand -hex 32`).
+* [x] `MONGODB_URI` points to a high-availability MongoDB Atlas replica set with credentials secured.
+* [x] Valid LLM credentials configured (`GEMINI_API_KEY` or `OPENAI_API_KEY`).
+* [x] Automatic environment validation runs on startup via `validate_production_configuration()`.
+* [x] Playwright Chromium dependencies installed on the host (`playwright install --with-deps chromium`).
+* [x] Compound and TTL database indexes verified via `create_indexes()`.
+
+### 2. Multi-Worker Server Execution
+For production concurrency, run with Uvicorn or Gunicorn with Uvicorn workers:
+
+```bash
+# Gunicorn with 4 async Uvicorn workers:
+gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app \
+  --bind 0.0.0.0:8000 \
+  --access-logfile - \
+  --error-logfile - \
+  --timeout 120
+```
+
+### 3. Docker Deployment
+Example multi-stage `Dockerfile` for production:
+
+```dockerfile
+FROM python:3.11-slim AS base
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl && rm -rf /var/lib/apt/lists/*
+
+# Install python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN playwright install --with-deps chromium
+
+COPY . .
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### 4. Health, Liveness & Readiness Probes
+The platform exposes probes compatible with Kubernetes, Docker Compose, AWS ECS, and Google Cloud Run:
+
+| Probe | Endpoint | Expected Response | Description |
+|---|---|---|---|
+| **Liveness** | `GET /live` or `/api/v1/health/live` | `{"status": "alive"}` (200 OK) | Confirms the FastAPI application process is alive. |
+| **Readiness** | `GET /ready` or `/api/v1/health/ready` | `{"status": "ready", "database": "connected"}` (200 OK) | Confirms MongoDB connection is active and ready to handle traffic. |
+| **Diagnostic** | `GET /health` or `/api/v1/health` | Comprehensive JSON report (200 OK) | Returns system health, version, uptime, and database metrics. |
+
+### 5. Production Security Architecture
+
+* **Secure Headers Middleware**: Automatically attaches `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` (in production).
+* **Cross-Origin Resource Sharing (CORS)**: Configured with `allow_origin_regex=r"^https?://.*$"` (or restricted via `CORS_ORIGIN_REGEX`) and `allow_credentials=True` so embeddable devotee widgets on any temple domain work smoothly.
+* **Sliding-Window Rate Limiting**:
+  - Devotee Chat: `60 requests/minute` per IP address.
+  - Admin Login: `10 requests/minute` to mitigate brute-force credential stuffing.
+  - Returns `429 Too Many Requests` with `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `Retry-After` headers.
+* **Operational Ceilings & Guards**:
+  - Max Upload Size: `25 MB` per file.
+  - Max Crawl Pages: Capped at `50 pages` per job.
+  - Crawler Concurrency: Throttled by an `asyncio.Semaphore(2)` to protect server memory.
+  - Crawler Timeout: Max `300 seconds` total runtime per crawl run.
+  - LLM Request Timeout: `30 seconds` with graceful failure handling.
+* **PII & Credential Scrubbing**: Automatically sanitizes emails, phone numbers, credit card numbers, and national IDs from chat dialogues before persistence. MongoDB connection strings and API keys are permanently scrubbed from client error responses.
+* **Structured JSON Logging**: When `LOG_FORMAT="json"` or `ENVIRONMENT="production"`, all logs are formatted as single-line JSON records containing `timestamp`, `level`, `logger`, `message`, `line`, and `module` for ingestion into Datadog, AWS CloudWatch, or ELK.
 
 ---
 

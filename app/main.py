@@ -6,11 +6,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints import chat
+from app.api.v1.endpoints.health import get_health, get_liveness, get_readiness
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import mongodb
 from app.core.errors import register_error_handlers
 from app.core.logging import get_logger, setup_logging
+from app.core.middleware import SecurityHeadersMiddleware
 
 logger = get_logger(__name__)
 
@@ -27,6 +29,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.ENVIRONMENT,
         settings.DEBUG,
     )
+
+    # Validate production environment configuration
+    validation_issues = settings.validate_production_configuration()
+    if validation_issues:
+        for issue in validation_issues:
+            logger.warning("CONFIGURATION WARNING: %s", issue)
+        if settings.is_production and any("JWT_SECRET_KEY" in iss for iss in validation_issues):
+            raise RuntimeError("Critical production security misconfiguration. Server startup aborted.")
+
     logger.info("Allowed CORS Origins: %s", settings.CORS_ORIGINS)
 
     # Initialize MongoDB Atlas connection
@@ -51,8 +62,20 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Configure CORS Middleware (permissive for embeddable widgets across all temple domains)
-    if getattr(settings, "CORS_ALLOW_ALL_ORIGINS", True):
+    # Inject Security Headers Middleware (X-Content-Type-Options, X-Frame-Options, HSTS, etc.)
+    fastapi_app.add_middleware(SecurityHeadersMiddleware)
+
+    # Configure CORS Middleware
+    if getattr(settings, "CORS_ORIGIN_REGEX", None):
+        fastapi_app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=settings.CORS_ORIGIN_REGEX,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
+        )
+    elif getattr(settings, "CORS_ALLOW_ALL_ORIGINS", True):
         fastapi_app.add_middleware(
             CORSMiddleware,
             allow_origin_regex=r"^https?://.*$",
@@ -79,6 +102,11 @@ def create_app() -> FastAPI:
 
     # Register centralized exception handlers
     register_error_handlers(fastapi_app)
+
+    # Root probe endpoints for Kubernetes / Docker / load balancers
+    fastapi_app.add_api_route("/health", get_health, methods=["GET"], include_in_schema=False)
+    fastapi_app.add_api_route("/live", get_liveness, methods=["GET"], include_in_schema=False)
+    fastapi_app.add_api_route("/ready", get_readiness, methods=["GET"], include_in_schema=False)
 
     # Register Public Chatbot API routes (/api/chat)
     fastapi_app.include_router(chat.router, prefix="/api")

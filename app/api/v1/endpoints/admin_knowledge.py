@@ -100,6 +100,12 @@ async def upload_document(
     if not content:
         raise BadRequestException("Uploaded file is empty.")
 
+    # Validate maximum allowed document size
+    max_size = getattr(settings, "MAX_UPLOAD_FILE_SIZE_BYTES", 25 * 1024 * 1024)
+    if len(content) > max_size:
+        max_mb = max_size // (1024 * 1024)
+        raise BadRequestException(f"Uploaded file exceeds maximum allowed size of {max_mb} MB.")
+
     # Validate file extension
     valid_extensions = {".pdf", ".docx", ".txt", ".text", ".md"}
     ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""

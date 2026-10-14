@@ -46,6 +46,10 @@ class MongoDBManager:
                 maxPoolSize=settings.MONGODB_MAX_POOL_SIZE,
                 serverSelectionTimeoutMS=settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
                 connectTimeoutMS=settings.MONGODB_CONNECT_TIMEOUT_MS,
+                socketTimeoutMS=getattr(settings, "MONGODB_SOCKET_TIMEOUT_MS", 15000),
+                maxIdleTimeMS=getattr(settings, "MONGODB_MAX_IDLE_TIME_MS", 60000),
+                retryWrites=True,
+                retryReads=True,
             )
             self.db = self.client[settings.MONGODB_DB_NAME]
 
@@ -143,25 +147,33 @@ class MongoDBManager:
             )
 
     async def create_indexes(self) -> Dict[str, List[str]]:
-        """Create necessary indexes on core collections for multi-temple support."""
+        """Create necessary compound and TTL indexes across collections for multi-temple support."""
         if self.db is None:
             return {}
 
         results: Dict[str, List[str]] = {}
 
         try:
-            # 1. Temples: unique slug
+            # 1. Temples: unique slug, active status
             temples_col = self.db[Collections.TEMPLES]
             idx_slug = await temples_col.create_index("slug", unique=True, background=True)
             idx_active = await temples_col.create_index("isActive", background=True)
             results[Collections.TEMPLES] = [idx_slug, idx_active]
 
-            # 2. Knowledge Documents: templeId + createdAt, templeId + contentHash
+            # 2. Knowledge Documents: templeId + createdAt, status, hash, sourceType, category
             docs_col = self.db[Collections.KNOWLEDGE_DOCUMENTS]
             idx_doc_temple = await docs_col.create_index([("templeId", 1), ("createdAt", -1)], background=True)
             idx_doc_status = await docs_col.create_index([("templeId", 1), ("status", 1)], background=True)
             idx_doc_hash = await docs_col.create_index([("templeId", 1), ("contentHash", 1)], background=True)
-            results[Collections.KNOWLEDGE_DOCUMENTS] = [idx_doc_temple, idx_doc_status, idx_doc_hash]
+            idx_doc_source = await docs_col.create_index([("templeId", 1), ("sourceType", 1)], background=True)
+            idx_doc_cat = await docs_col.create_index([("templeId", 1), ("category", 1)], background=True)
+            results[Collections.KNOWLEDGE_DOCUMENTS] = [
+                idx_doc_temple,
+                idx_doc_status,
+                idx_doc_hash,
+                idx_doc_source,
+                idx_doc_cat,
+            ]
 
             # 3. Knowledge Chunks: templeId + documentId + chunkIndex
             chunks_col = self.db[Collections.KNOWLEDGE_CHUNKS]
@@ -171,26 +183,35 @@ class MongoDBManager:
             )
             results[Collections.KNOWLEDGE_CHUNKS] = [idx_chunk]
 
-            # 4. Admins: unique email, templeId + role
+            # 4. Admins: unique email, unique username, templeId + role
             admins_col = self.db[Collections.ADMINS]
             idx_email = await admins_col.create_index("email", unique=True, background=True)
+            idx_username = await admins_col.create_index("username", unique=True, background=True)
             idx_admin_temple = await admins_col.create_index([("templeId", 1), ("role", 1)], background=True)
-            results[Collections.ADMINS] = [idx_email, idx_admin_temple]
+            results[Collections.ADMINS] = [idx_email, idx_username, idx_admin_temple]
 
-            # 5. Conversations: templeId + sessionId
+            # 5. Conversations: templeId + sessionId, TTL on expiresAt
             conv_col = self.db[Collections.CONVERSATIONS]
             idx_conv = await conv_col.create_index([("templeId", 1), ("sessionId", 1)], background=True)
-            results[Collections.CONVERSATIONS] = [idx_conv]
+            idx_conv_ttl = await conv_col.create_index("expiresAt", expireAfterSeconds=0, background=True)
+            results[Collections.CONVERSATIONS] = [idx_conv, idx_conv_ttl]
 
-            # 6. Messages: templeId + conversationId + createdAt
+            # 6. Messages: templeId + conversationId + createdAt, TTL on expiresAt, templeId + role
             msg_col = self.db[Collections.MESSAGES]
             idx_msg = await msg_col.create_index(
                 [("templeId", 1), ("conversationId", 1), ("createdAt", 1)],
                 background=True,
             )
-            results[Collections.MESSAGES] = [idx_msg]
+            idx_msg_ttl = await msg_col.create_index("expiresAt", expireAfterSeconds=0, background=True)
+            idx_msg_role = await msg_col.create_index([("templeId", 1), ("role", 1)], background=True)
+            results[Collections.MESSAGES] = [idx_msg, idx_msg_ttl, idx_msg_role]
 
-            logger.info("MongoDB initial collection indexes ensured successfully.")
+            # 7. Crawl Jobs: templeId + startedAt
+            crawl_col = self.db[Collections.CRAWL_JOBS]
+            idx_crawl = await crawl_col.create_index([("templeId", 1), ("startedAt", -1)], background=True)
+            results[Collections.CRAWL_JOBS] = [idx_crawl]
+
+            logger.info("MongoDB collection indexes ensured successfully.")
         except Exception as exc:
             logger.warning("Could not create MongoDB indexes: %s", str(exc))
 

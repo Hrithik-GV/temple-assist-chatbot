@@ -7,6 +7,7 @@ from app.core.auth import get_current_admin
 from app.core.config import settings
 from app.core.errors import BadRequestException, ForbiddenException
 from app.core.logging import get_logger
+from app.core.rate_limiter import RateLimiter
 from app.core.security import create_access_token
 from app.models.admin import AdminRole
 from app.models.auth import (
@@ -20,6 +21,11 @@ from app.services.auth_service import auth_service
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin/auth", tags=["Admin Authentication"])
+
+# Rate limit admin login attempts to protect against brute-force attacks
+login_rate_limiter = RateLimiter(
+    requests_per_minute=getattr(settings, "ADMIN_LOGIN_RATE_LIMIT_PER_MINUTE", 10)
+)
 
 
 def _map_admin_to_profile(admin: Dict[str, Any]) -> AdminProfileResponse:
@@ -41,6 +47,7 @@ def _map_admin_to_profile(admin: Dict[str, Any]) -> AdminProfileResponse:
     "/login",
     response_model=TokenResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(login_rate_limiter)],
     summary="Admin Login",
     description="Authenticate an administrator with username/email and password to receive a JWT access token.",
 )
