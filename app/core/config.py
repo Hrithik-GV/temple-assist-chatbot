@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     MAX_CONVERSATION_HISTORY_TURNS: int = 5  # Number of recent dialogue turns loaded into prompt context
     CONVERSATION_RETENTION_DAYS: int = 30  # Number of days before chat history expires (0 for indefinite)
 
+    # JWT Authentication Configuration
+    JWT_SECRET_KEY: str = "temple-assist-default-super-secret-jwt-key-change-in-production-32chars"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours default validity
+
     # Rate Limiting Configuration (for public chat endpoint)
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60

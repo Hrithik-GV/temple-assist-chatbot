@@ -77,6 +77,36 @@ class ServiceUnavailableException(AppException):
         )
 
 
+class UnauthorizedException(AppException):
+    """Exception when authentication credentials are missing or invalid (HTTP 401)."""
+
+    def __init__(
+        self,
+        message: str = "Authentication required or invalid credentials.",
+        details: Optional[Any] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ):
+        super().__init__(
+            message=message,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code="UNAUTHORIZED",
+            details=details,
+        )
+        self.headers = headers or {"WWW-Authenticate": "Bearer"}
+
+
+class ForbiddenException(AppException):
+    """Exception when an authenticated user lacks authorization to access a resource or another temple (HTTP 403)."""
+
+    def __init__(self, message: str = "You do not have permission to access this resource.", details: Optional[Any] = None):
+        super().__init__(
+            message=message,
+            status_code=status.HTTP_403_FORBIDDEN,
+            error_code="FORBIDDEN",
+            details=details,
+        )
+
+
 def create_error_response(
     status_code: int,
     code: str,
@@ -121,6 +151,7 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
         code=exc.error_code,
         message=exc.message,
         details=exc.details,
+        headers=getattr(exc, "headers", None),
     )
 
 

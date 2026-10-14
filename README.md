@@ -502,6 +502,111 @@ Cross-Origin Resource Sharing (CORS) is configured with `allow_origin_regex=r"^h
 
 ---
 
+## Protected Admin APIs & Authentication
+
+The platform provides a secured, multi-tenant administrative API suite enabling temple managers and platform superadmins to manage temples, upload documents, trigger web crawling, ingest verified FAQs, view ingestion status, and inspect unanswered devotee queries.
+
+```text
+Admin Request (Authorization: Bearer <JWT>)
+  ├── 1. JWT Bearer Extractor     (Validates token signature, expiration, and payload claims)
+  ├── 2. Admin Verification       (Verifies active status in MongoDB admins collection)
+  ├── 3. Role & Tenancy Guardrail (Blocks unauthorized roles and cross-temple access)
+  │     ├── Superadmin            -> Full platform-wide access across all temples
+  │     └── Temple Admin          -> Restricted strictly to assigned templeId
+  └── 4. Protected Execution      (Temple management, document upload, crawler, FAQs, analytics)
+```
+
+### Security Architecture
+
+- **Password Hashing**: Plaintext passwords are never stored. Passwords are salted and hashed using **bcrypt** (`bcrypt.gensalt()`).
+- **JWT Bearer Authentication**: Uses standard HMAC-SHA256 (`HS256`) signed tokens with claims (`sub`, `username`, `email`, `role`, `templeId`, `iat`, `exp`).
+- **Temple-Level Tenancy Barrier**: 
+  - Every protected endpoint with a `{templeId}` path parameter executes `RequireTempleAccess()`.
+  - If a `temple_admin` assigned to `temple-alpha` attempts to read, upload, crawl, or delete data for `temple-beta`, the request is immediately rejected with `403 Forbidden` (`FORBIDDEN`).
+  - Cross-temple access is strictly blocked at the route dependency layer.
+
+### 1. Authentication Endpoints (`/api/v1/admin/auth`)
+
+#### Admin Login (`POST /api/v1/admin/auth/login`)
+```json
+// Request
+{
+  "username": "somnath_admin",
+  "password": "SecurePassword2026!"
+}
+
+// Response (200 OK)
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "tokenType": "bearer",
+  "expiresIn": 86400,
+  "admin": {
+    "id": "admin_abc123",
+    "email": "admin@somnath.org",
+    "username": "somnath_admin",
+    "fullName": "Somnath Temple Admin",
+    "templeId": "somnath-01",
+    "role": "temple_admin",
+    "isActive": true
+  }
+}
+```
+
+#### Current Admin Profile (`GET /api/v1/admin/auth/me`)
+Headers: `Authorization: Bearer <token>`
+Returns the authenticated administrator's profile and assigned `templeId`.
+
+#### Register Administrator (`POST /api/v1/admin/auth/register`)
+Enables bootstrapping initial administrators and registering temple managers with bcrypt hashing and temple assignment validation.
+
+### 2. Temple Management Endpoints (`/api/v1/admin/temples`)
+
+| Method | Endpoint | Authorization | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/admin/temples` | **Superadmin only** | Register a new temple entity with custom timings, location, and slug |
+| `GET` | `/api/v1/admin/temples` | Superadmin / Temple Admin | Superadmin sees all; Temple Admin sees only their assigned temple |
+| `GET` | `/api/v1/admin/temples/{templeId}` | `RequireTempleAccess` | Retrieve temple details (enforces temple-level scoping) |
+| `PUT` | `/api/v1/admin/temples/{templeId}` | `RequireTempleAccess` | Update temple details, darshan timings, or contact information |
+| `DELETE`| `/api/v1/admin/temples/{templeId}` | **Superadmin only** | Deactivate temple account |
+
+### 3. Knowledge Management Endpoints (`/api/v1/admin/knowledge`)
+
+All endpoints require `Authorization: Bearer <token>` and enforce `RequireTempleAccess(templeId)`:
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/documents` | List all ingested documents, their status (`processed`, `failed`), and chunk counts |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/documents/{documentId}` | View document details and its indexed vector chunks |
+| `DELETE` | `/api/v1/admin/knowledge/{templeId}/documents/{documentId}` | Delete document and purge all associated vector chunks from search |
+| `POST` | `/api/v1/admin/knowledge/{templeId}/upload` | Upload PDF, DOCX, or TXT file (`multipart/form-data`) for instant vector ingestion |
+| `POST` | `/api/v1/admin/knowledge/{templeId}/faq` | Add verified Question & Answer pair into the knowledge base |
+| `POST` | `/api/v1/admin/knowledge/{templeId}/text` | Ingest raw text knowledge (e.g. guidelines, history, seva list) |
+| `POST` | `/api/v1/admin/knowledge/{templeId}/crawl` | Trigger Playwright crawler to scrape and index a temple website |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/unanswered` | View devotee inquiries that triggered fallback responses (gaps in knowledge base) |
+
+#### Example: Ingesting a Verified FAQ (`POST /api/v1/admin/knowledge/{templeId}/faq`)
+```bash
+curl -X POST "http://localhost:8000/api/v1/admin/knowledge/somnath-01/faq" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "What are the special pooja booking charges?",
+    "answer": "Special Abhishek pooja is 500 rupees per devotee and includes sanctum entry.",
+    "category": "rituals"
+  }'
+```
+
+#### Example: Uploading a Knowledge Document File
+```bash
+curl -X POST "http://localhost:8000/api/v1/admin/knowledge/somnath-01/upload" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -F "file=@darshan_rules.pdf" \
+  -F "title=Official Darshan Guidelines 2026" \
+  -F "category=darshan"
+```
+
+---
+
 ## Multi-Temple Database Collections
 
 | Collection | Model | Description | Mandatory Scope |
@@ -585,6 +690,9 @@ cp .env.example .env
 | `RAG_DEFAULT_SIMILARITY_THRESHOLD` | Cosine similarity cutoff threshold for retrieval | `0.4` |
 | `MAX_CONVERSATION_HISTORY_TURNS` | Recent dialogue turns loaded into prompt context | `5` |
 | `CONVERSATION_RETENTION_DAYS` | Days before chat conversations/messages expire | `30` |
+| `JWT_SECRET_KEY` | Secret key for signing admin authentication JWTs | `ChangeInProduction` |
+| `JWT_ALGORITHM` | Cryptographic algorithm for JWT signing | `HS256` |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access token lifespan in minutes | `1440` (24h) |
 
 ---
 
@@ -608,7 +716,7 @@ Execute the automated test suite with `pytest`:
 pytest -v
 ```
 
-All 102 unit and integration tests cover:
+All 121 unit and integration tests cover:
 - FastAPI lifecycle, CORS, and health check diagnostic endpoints.
 - Multi-temple MongoDB data models, compound indexes, and tenancy scoping.
 - Document text extraction for PDF, DOCX, and TXT files.
@@ -642,11 +750,17 @@ All 102 unit and integration tests cover:
 - PII sanitization (scrubbing emails, phone numbers, credit cards, and national IDs like Aadhaar/SSN).
 - IP address anonymization and telemetry credential scrubbing.
 - Configurable history retention with automatic TTL expiration timestamps and on-demand cleanup.
+- Salted bcrypt password hashing and verification.
+- HMAC-SHA256 JWT access token generation, decoding, expiry validation, and signature tampering defense.
+- Admin authentication login (`POST /api/v1/admin/auth/login`) and current profile (`GET /api/v1/admin/auth/me`).
+- Strict temple-level multi-tenant authorization (`RequireTempleAccess`): blocking cross-temple access with `403 Forbidden`.
+- Superadmin privileges vs temple-scoped admin role barriers.
+- Protected document listing, deletion, verified FAQ ingestion, raw text ingestion, and website crawl triggering.
 
 ---
 
 ## Roadmap (Next Phases)
 
 - **Phase 6: Multi-Turn Conversation History**: Multi-turn dialogue management, session storage in `conversations`/`messages`, and cross-temple isolation. *(Completed)*
-- **Phase 7: Admin API & Authentication**: JWT authentication, temple admin management, and document upload endpoints.
+- **Phase 7: Admin API & Authentication**: JWT authentication, temple admin management, protected knowledge management, and multi-tenant authorization. *(Completed)*
 - **Phase 8: Web Embeddable Chat Widget**: Lightweight devotee chat widget npm package.
