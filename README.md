@@ -23,6 +23,9 @@ temple-assist-chatbot/
 │   ├── main.py               # FastAPI application factory, lifespan & entrypoint
 │   ├── api/                  # API layer (routers & endpoints)
 │   │   ├── __init__.py
+│   │   ├── endpoints/
+│   │   │   ├── __init__.py
+│   │   │   └── chat.py       # Public Chatbot API (POST /api/chat)
 │   │   └── v1/
 │   │       ├── __init__.py
 │   │       ├── router.py     # Aggregated v1 API router
@@ -35,7 +38,8 @@ temple-assist-chatbot/
 │   │   ├── config.py         # Pydantic Settings management (.env loader)
 │   │   ├── database.py       # MongoDB Atlas connection manager & index initialization
 │   │   ├── errors.py         # Exception hierarchy & centralized error handlers
-│   │   └── logging.py        # Centralized formatted logging foundation
+│   │   ├── logging.py        # Centralized formatted logging foundation
+│   │   └── rate_limiter.py   # Rate limiting engine (sliding window / IP-based)
 │   ├── models/               # Multi-Temple domain models and Pydantic schemas
 │   │   ├── __init__.py
 │   │   ├── base.py           # MongoBaseModel with ObjectId and camelCase serialization
@@ -45,6 +49,7 @@ temple-assist-chatbot/
 │   │   ├── temple.py         # Temple profile, timings, location, and contact models
 │   │   ├── knowledge.py      # KnowledgeDocument, KnowledgeChunk, VectorSearchResult, IngestionResult
 │   │   ├── rag.py            # RAGQueryRequest, RAGAnswerResponse, RAGSourceCitation, LLMResponse
+│   │   ├── chat.py           # ChatRequest, ChatResponse, ChatSource (public widget schemas)
 │   │   ├── admin.py          # Admin model with role-based and temple scoping
 │   │   ├── conversation.py   # Multi-turn chat session model (templeId-scoped)
 │   │   └── message.py        # Dialogue message history model (templeId-scoped)
@@ -70,6 +75,7 @@ temple-assist-chatbot/
 └── tests/                    # Automated test suite
     ├── __init__.py
     ├── conftest.py           # Pytest fixtures and TestClient
+    ├── test_chat.py          # Public chatbot API, rate limit, CORS, and validation tests
     ├── test_crawler.py       # URL filtering, HTML cleaning, and crawler tests
     ├── test_database.py      # MongoDB models, manager, and multi-tenancy tests
     ├── test_health.py        # Health, probe, and database readiness tests
@@ -396,6 +402,69 @@ asyncio.run(main())
 
 ---
 
+## Public Chatbot API (`POST /api/chat`)
+
+A public-facing, widget-ready endpoint designed for website embedding, mobile applications, and devotee inquiry interfaces.
+
+```text
+Visitor Question (Widget / Mobile App)
+  ├── 1. Origin CORS Check      (Permissive regex allows widget embedding on any temple domain)
+  ├── 2. Sliding Window Limiter (Protects against abuse via IP rate limiting with Retry-After)
+  ├── 3. templeId Validator     (Ensures valid format and verifies temple is active)
+  ├── 4. RAG Pipeline Query     (Retrieves verified chunks & generates grounded answer)
+  ├── 5. Error Sanitization     (Masks internal details, API keys, and database specifics)
+  └── 6. Structured Output      (answer, attribution sources, templeId, sessionId)
+```
+
+### Request Specification (`POST /api/chat`)
+
+```json
+{
+  "templeId": "temple-001",
+  "message": "What time is the morning pooja?",
+  "sessionId": "sess_devotee_987"
+}
+```
+
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `templeId` | `string` | **Yes** | Identifier or slug of the temple (alphanumeric, dashes, underscores) |
+| `message` | `string` | **Yes** | Devotee's question or message (1 to 2000 characters) |
+| `sessionId` | `string` | No | Client session identifier for conversation continuity |
+
+### Response Specification
+
+```json
+{
+  "answer": "Morning pooja commences daily at 6:00 AM.",
+  "sources": [
+    {
+      "title": "Pooja Timings Schedule",
+      "source": "temple_pooja.pdf",
+      "url": "https://temple.org/pooja",
+      "snippet": "Morning pooja commences daily at 6:00 AM...",
+      "score": 0.885
+    }
+  ],
+  "templeId": "temple-001",
+  "sessionId": "sess_devotee_987",
+  "hasRelevantContext": true
+}
+```
+
+### Rate Limiting Architecture
+- **In-Memory Sliding Window**: Configured via `RATE_LIMIT_REQUESTS_PER_MINUTE` (default: 60 rpm).
+- **Standard Headers Attached**:
+  - `X-RateLimit-Limit`: Maximum requests per minute window.
+  - `X-RateLimit-Remaining`: Remaining request allowance in current window.
+  - `Retry-After`: Seconds to wait before retrying when a `429 Too Many Requests` is returned.
+- **Swappable Architecture**: The `RateLimiter` dependency accepts any implementation of `BaseRateLimiter`, allowing distributed Redis backends in high-traffic deployments.
+
+### Embeddable Widget CORS
+Cross-Origin Resource Sharing (CORS) is configured with `allow_origin_regex=r"^https?://.*$"` and credential support. This permits embeddable JavaScript/React widgets running on any official temple domain (`https://somnath.org`, `https://tirupatibalaji.ap.gov.in`, `http://localhost:3000`) to call `POST /api/chat` seamlessly.
+
+---
+
 ## Multi-Temple Database Collections
 
 | Collection | Model | Description | Mandatory Scope |
@@ -500,7 +569,7 @@ Execute the automated test suite with `pytest`:
 pytest -v
 ```
 
-All 77 unit and integration tests cover:
+All 85 unit and integration tests cover:
 - FastAPI lifecycle, CORS, and health check diagnostic endpoints.
 - Multi-temple MongoDB data models, compound indexes, and tenancy scoping.
 - Document text extraction for PDF, DOCX, and TXT files.
@@ -523,11 +592,16 @@ All 77 unit and integration tests cover:
 - Authoritative no-context fallback responses when information is absent.
 - Swappable LLM provider interface (`GeminiLLMProvider`, `OpenAILLMProvider`, `MockLLMProvider`).
 - `/api/v1/rag/query` HTTP endpoint validation and execution.
+- Public Chatbot API (`POST /api/chat`) and alias (`POST /api/v1/chat`).
+- Request validation on `templeId` and empty/whitespace message content.
+- Sliding window rate limiting enforcement with `429 Too Many Requests` and `Retry-After`.
+- Permissive CORS preflight handling for embeddable widgets across any temple domain.
+- Sensitive error masking ensuring database credentials and API keys are never exposed.
 
 ---
 
 ## Roadmap (Next Phases)
 
-- **Phase 6: Conversational Chat API**: Multi-turn dialogue management, session storage in `conversations`/`messages`, streaming responses, and telemetry.
+- **Phase 6: Multi-Turn Conversation History**: Multi-turn dialogue management, session storage in `conversations`/`messages`, and streaming responses.
 - **Phase 7: Admin API & Authentication**: JWT authentication, temple admin management, and document upload endpoints.
-- **Phase 8: Web Embeddable Chat Widget**: Lightweight devotee chat widget.
+- **Phase 8: Web Embeddable Chat Widget**: Lightweight devotee chat widget npm package.

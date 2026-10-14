@@ -82,6 +82,7 @@ def create_error_response(
     code: str,
     message: str,
     details: Optional[Any] = None,
+    headers: Optional[Dict[str, str]] = None,
 ) -> JSONResponse:
     """Create a standardized error response dictionary.
 
@@ -90,6 +91,7 @@ def create_error_response(
         code: Machine-readable error code.
         message: Human-readable error message.
         details: Optional structured details (e.g. validation issues).
+        headers: Optional HTTP headers dictionary.
 
     Returns:
         JSONResponse: Standardized JSON error response.
@@ -102,7 +104,7 @@ def create_error_response(
             "details": details,
         },
     }
-    return JSONResponse(status_code=status_code, content=content)
+    return JSONResponse(status_code=status_code, content=content, headers=headers)
 
 
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
@@ -141,6 +143,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
         code=f"HTTP_{exc.status_code}",
         message=str(exc.detail),
         details=None,
+        headers=exc.headers,
     )
 
 

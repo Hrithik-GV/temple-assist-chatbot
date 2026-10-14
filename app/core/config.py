@@ -71,7 +71,12 @@ class Settings(BaseSettings):
     RAG_DEFAULT_TOP_K: int = 5
     RAG_MAX_CONTEXT_CHUNKS: int = 8
 
-    # CORS
+    # Rate Limiting Configuration (for public chat endpoint)
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60
+
+    # CORS & Public Widget Configuration
+    CORS_ALLOW_ALL_ORIGINS: bool = True  # Allows embedding chat widget on any temple domain
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:3000",
         "http://localhost:5173",

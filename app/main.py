@@ -5,6 +5,7 @@ from typing import AsyncGenerator, Dict
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.endpoints import chat
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import mongodb
@@ -50,25 +51,39 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Configure CORS Middleware
-    cors_origins = (
-        settings.CORS_ORIGINS
-        if isinstance(settings.CORS_ORIGINS, list)
-        else [settings.CORS_ORIGINS]
-    )
-    if cors_origins:
+    # Configure CORS Middleware (permissive for embeddable widgets across all temple domains)
+    if getattr(settings, "CORS_ALLOW_ALL_ORIGINS", True):
         fastapi_app.add_middleware(
             CORSMiddleware,
-            allow_origins=cors_origins,
+            allow_origin_regex=r"^https?://.*$",
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
+            expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
         )
+    else:
+        cors_origins = (
+            settings.CORS_ORIGINS
+            if isinstance(settings.CORS_ORIGINS, list)
+            else [settings.CORS_ORIGINS]
+        )
+        if cors_origins:
+            fastapi_app.add_middleware(
+                CORSMiddleware,
+                allow_origins=cors_origins,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+                expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
+            )
 
     # Register centralized exception handlers
     register_error_handlers(fastapi_app)
 
-    # Register API routes
+    # Register Public Chatbot API routes (/api/chat)
+    fastapi_app.include_router(chat.router, prefix="/api")
+
+    # Register versioned API routes (/api/v1/...)
     fastapi_app.include_router(api_router, prefix=settings.API_V1_STR)
 
     # Root informational endpoint
