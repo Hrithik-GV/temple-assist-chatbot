@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     RAG_DEFAULT_TOP_K: int = 5
     RAG_MAX_CONTEXT_CHUNKS: int = 8
 
+    # Conversation & Session History Configuration
+    MAX_CONVERSATION_HISTORY_TURNS: int = 5  # Number of recent dialogue turns loaded into prompt context
+    CONVERSATION_RETENTION_DAYS: int = 30  # Number of days before chat history expires (0 for indefinite)
+
     # Rate Limiting Configuration (for public chat endpoint)
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60

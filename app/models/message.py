@@ -1,5 +1,6 @@
 """Chat message model for conversational exchange history."""
 
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import Field
@@ -36,7 +37,12 @@ class Message(MongoBaseModel):
     content: str = Field(..., description="Message text content")
     sources: Optional[List[Dict[str, Any]]] = Field(
         default=None,
-        description="Citations/grounding references (for future RAG responses)",
+        description="Citations/grounding references (for RAG responses)",
+    )
+    expires_at: Optional[datetime] = Field(
+        default=None,
+        alias="expiresAt",
+        description="TTL expiration timestamp for automatic history retention",
     )
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
@@ -47,3 +53,8 @@ class Message(MongoBaseModel):
     def templeId(self) -> str:
         """Convenience property for camelCase templeId access."""
         return self.temple_id
+
+    @property
+    def conversationId(self) -> str:
+        """Convenience property for camelCase conversationId access."""
+        return self.conversation_id

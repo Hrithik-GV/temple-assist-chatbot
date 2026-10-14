@@ -404,16 +404,18 @@ asyncio.run(main())
 
 ## Public Chatbot API (`POST /api/chat`)
 
-A public-facing, widget-ready endpoint designed for website embedding, mobile applications, and devotee inquiry interfaces.
+A public-facing, widget-ready endpoint designed for website embedding, mobile applications, and devotee inquiry interfaces supporting multi-turn conversational dialogue.
 
 ```text
 Visitor Question (Widget / Mobile App)
-  ├── 1. Origin CORS Check      (Permissive regex allows widget embedding on any temple domain)
-  ├── 2. Sliding Window Limiter (Protects against abuse via IP rate limiting with Retry-After)
-  ├── 3. templeId Validator     (Ensures valid format and verifies temple is active)
-  ├── 4. RAG Pipeline Query     (Retrieves verified chunks & generates grounded answer)
-  ├── 5. Error Sanitization     (Masks internal details, API keys, and database specifics)
-  └── 6. Structured Output      (answer, attribution sources, templeId, sessionId)
+  ├── 1. Origin CORS Check          (Permissive regex allows widget embedding on any temple domain)
+  ├── 2. Sliding Window Limiter     (Protects against abuse via IP rate limiting with Retry-After)
+  ├── 3. templeId & Tenant Guard    (Validates templeId and verifies active status)
+  ├── 4. Session & Tenancy Resolver (Validates/creates conversationId; blocks cross-temple leakage)
+  ├── 5. History Context Retrieval  (Loads recent dialogue turns bounded by MAX_CONVERSATION_HISTORY_TURNS)
+  ├── 6. RAG Pipeline Query         (Retrieves verified chunks & generates grounded answer)
+  ├── 7. PII Redaction & Storage    (Scrubs phone numbers, emails, cards; sets TTL expiration)
+  └── 8. Structured Response        (answer, attribution sources, templeId, conversationId, sessionId)
 ```
 
 ### Request Specification (`POST /api/chat`)
@@ -422,6 +424,7 @@ Visitor Question (Widget / Mobile App)
 {
   "templeId": "temple-001",
   "message": "What time is the morning pooja?",
+  "conversationId": "conv_4f6d23038e914c3c",
   "sessionId": "sess_devotee_987"
 }
 ```
@@ -430,7 +433,8 @@ Visitor Question (Widget / Mobile App)
 | :--- | :--- | :--- | :--- |
 | `templeId` | `string` | **Yes** | Identifier or slug of the temple (alphanumeric, dashes, underscores) |
 | `message` | `string` | **Yes** | Devotee's question or message (1 to 2000 characters) |
-| `sessionId` | `string` | No | Client session identifier for conversation continuity |
+| `conversationId`| `string` | No | Conversation session ID to continue an ongoing multi-turn dialogue (auto-generated if omitted) |
+| `sessionId` | `string` | No | Client device/browser session identifier for analytics |
 
 ### Response Specification
 
@@ -447,10 +451,43 @@ Visitor Question (Widget / Mobile App)
     }
   ],
   "templeId": "temple-001",
+  "conversationId": "conv_4f6d23038e914c3c",
   "sessionId": "sess_devotee_987",
   "hasRelevantContext": true
 }
 ```
+
+### Multi-Turn Dialogue & Context Continuity
+
+When a devotee sends an initial inquiry without `conversationId`, the backend creates a new conversational session and returns an active `conversationId` (e.g. `conv_4f6d...`). 
+
+Subsequent client requests pass this `conversationId` back to the server:
+1. **Context Loading**: The backend loads up to `MAX_CONVERSATION_HISTORY_TURNS` (default: 5 turns / 10 messages) in chronological order.
+2. **Contextual Grounding**: Recent turns are injected into the LLM prompt under `RECENT CONVERSATION HISTORY:` so the model resolves anaphora (e.g. *"What about on weekends?"*, *"What does that ritual cost?"*).
+3. **Follow-Up Search Expansion**: If a short follow-up query yields 0 vector search results, the RAG engine combines the prior user question with the current follow-up to retrieve relevant temple chunks.
+
+### Strict Multi-Tenant Conversation Isolation
+
+Conversations are strictly isolated by `templeId`:
+- **Ownership Verification**: When a client provides a `conversationId`, the backend queries `{"templeId": temple_id, "conversationId": conversation_id}`.
+- **Cross-Temple Protection**: If a client provides a valid `conversationId` belonging to Temple A while querying with `templeId: "Temple B"`, access is instantly blocked and returns `404 Not Found`. Temple B cannot read, append to, or leak dialogue from Temple A.
+- **Physical Separation**: Chat conversations and messages are stored in separate MongoDB collections (`conversations` and `messages`), completely isolated from the temple knowledge base (`knowledge_chunks`).
+
+### Privacy & PII Scrubbing
+
+Devotees may inadvertently enter personal contact details or sensitive financial information in chat inquiries. Before saving any user dialogue to MongoDB:
+- **Phone Numbers**: Local 10-digit, `+91`, US `(555) 123-4567`, and international formats are replaced with `[PHONE_REDACTED]`.
+- **Email Addresses**: Scrubbed and replaced with `[EMAIL_REDACTED]`.
+- **Payment Cards**: 13-19 digit card numbers are replaced with `[CARD_REDACTED]`.
+- **National IDs**: Indian Aadhaar (`1234 5678 9012`) and US SSN (`123-45-6789`) are replaced with `[ID_REDACTED]`.
+- **IP Anonymization**: Session telemetry anonymizes client IPs (zeroing the last octet: `203.0.113.0`) and strips authorization tokens/cookies.
+
+### Configurable History Retention & TTL Expiration
+
+- **Turns Bounding**: `MAX_CONVERSATION_HISTORY_TURNS` (default: 5) limits context window overhead and token costs.
+- **Automatic Expiration**: `CONVERSATION_RETENTION_DAYS` (default: 30) computes `expiresAt = createdAt + retention_days`.
+- **MongoDB TTL Index**: A native TTL index on `expiresAt` automatically purges expired conversation and message documents with zero manual maintenance.
+- **Programmatic Cleanup**: The `conversation_service.cleanup_expired_history(temple_id)` method provides on-demand retention enforcement.
 
 ### Rate Limiting Architecture
 - **In-Memory Sliding Window**: Configured via `RATE_LIMIT_REQUESTS_PER_MINUTE` (default: 60 rpm).
@@ -546,6 +583,8 @@ cp .env.example .env
 | `OPENAI_MODEL` | OpenAI model name | `gpt-4o-mini` |
 | `LLM_TEMPERATURE` | Generation temperature (lower = more grounded) | `0.2` |
 | `RAG_DEFAULT_SIMILARITY_THRESHOLD` | Cosine similarity cutoff threshold for retrieval | `0.4` |
+| `MAX_CONVERSATION_HISTORY_TURNS` | Recent dialogue turns loaded into prompt context | `5` |
+| `CONVERSATION_RETENTION_DAYS` | Days before chat conversations/messages expire | `30` |
 
 ---
 
@@ -569,7 +608,7 @@ Execute the automated test suite with `pytest`:
 pytest -v
 ```
 
-All 85 unit and integration tests cover:
+All 102 unit and integration tests cover:
 - FastAPI lifecycle, CORS, and health check diagnostic endpoints.
 - Multi-temple MongoDB data models, compound indexes, and tenancy scoping.
 - Document text extraction for PDF, DOCX, and TXT files.
@@ -597,11 +636,17 @@ All 85 unit and integration tests cover:
 - Sliding window rate limiting enforcement with `429 Too Many Requests` and `Retry-After`.
 - Permissive CORS preflight handling for embeddable widgets across any temple domain.
 - Sensitive error masking ensuring database credentials and API keys are never exposed.
+- Unique session and conversation ID generation (`conv_...`, `sess_...`).
+- Multi-turn conversation history loading bounded by configurable `MAX_CONVERSATION_HISTORY_TURNS`.
+- Strict cross-temple conversation isolation preventing access across different temples.
+- PII sanitization (scrubbing emails, phone numbers, credit cards, and national IDs like Aadhaar/SSN).
+- IP address anonymization and telemetry credential scrubbing.
+- Configurable history retention with automatic TTL expiration timestamps and on-demand cleanup.
 
 ---
 
 ## Roadmap (Next Phases)
 
-- **Phase 6: Multi-Turn Conversation History**: Multi-turn dialogue management, session storage in `conversations`/`messages`, and streaming responses.
+- **Phase 6: Multi-Turn Conversation History**: Multi-turn dialogue management, session storage in `conversations`/`messages`, and cross-temple isolation. *(Completed)*
 - **Phase 7: Admin API & Authentication**: JWT authentication, temple admin management, and document upload endpoints.
 - **Phase 8: Web Embeddable Chat Widget**: Lightweight devotee chat widget npm package.

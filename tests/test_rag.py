@@ -237,6 +237,28 @@ class TestRAGPromptConstruction:
         assert "DEVOTEE QUESTION:\nWhat time does Darshan begin?" in user_prompt
         assert "ANSWER:" in user_prompt
 
+    def test_user_prompt_includes_conversation_history(self, test_rag_service: RAGService) -> None:
+        """User prompt embeds RECENT CONVERSATION HISTORY when dialogue history is provided."""
+        context = "Source [1]: Special laddu prasadam is available at counter 4."
+        question = "What is the price?"
+        history = [
+            {"role": "user", "content": "Where can I get prasadam?"},
+            {"role": "assistant", "content": "Special laddu prasadam is available at counter 4."},
+        ]
+
+        user_prompt = test_rag_service.build_user_prompt(
+            question=question,
+            context=context,
+            conversation_history=history,
+        )
+
+        assert "TEMPLE CONTEXT:" in user_prompt
+        assert "RECENT CONVERSATION HISTORY:" in user_prompt
+        assert "Devotee: Where can I get prasadam?" in user_prompt
+        assert "Assistant: Special laddu prasadam is available at counter 4." in user_prompt
+        assert "DEVOTEE QUESTION:\nWhat is the price?" in user_prompt
+        assert "ANSWER:" in user_prompt
+
 
 # ==============================================================================
 # 5. LLM Provider & Swappable Interface Tests

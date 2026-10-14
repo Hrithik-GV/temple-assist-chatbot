@@ -34,10 +34,15 @@ class ChatRequest(BaseModel):
         max_length=2000,
         description="User message or question",
     )
+    conversation_id: Optional[str] = Field(
+        default=None,
+        alias="conversationId",
+        description="Optional conversation/session identifier to continue an ongoing multi-turn dialogue",
+    )
     session_id: Optional[str] = Field(
         default=None,
         alias="sessionId",
-        description="Optional client session identifier",
+        description="Optional client browser/device session identifier",
     )
 
 
@@ -52,10 +57,15 @@ class ChatResponse(BaseModel):
         description="Attribution source citations from verified temple records",
     )
     temple_id: str = Field(..., alias="templeId", description="Target temple identifier")
+    conversation_id: str = Field(
+        ...,
+        alias="conversationId",
+        description="Active conversation identifier for multi-turn continuity",
+    )
     session_id: Optional[str] = Field(
         default=None,
         alias="sessionId",
-        description="Session identifier if provided",
+        description="Session identifier if provided or associated",
     )
     has_relevant_context: bool = Field(
         default=False,

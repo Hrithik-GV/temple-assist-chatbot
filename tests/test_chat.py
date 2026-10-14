@@ -51,6 +51,7 @@ def test_post_api_chat_success(client: TestClient) -> None:
 
     assert data["templeId"] == "temple-001"
     assert data["answer"] == "Morning pooja commences daily at 6:00 AM."
+    assert "conversationId" in data and data["conversationId"] is not None
     assert data["hasRelevantContext"] is True
     assert len(data["sources"]) == 1
 
@@ -87,6 +88,7 @@ def test_post_api_v1_chat_alias(client: TestClient) -> None:
     data = response.json()
     assert data["templeId"] == "somnath-01"
     assert data["answer"] == "Evening aarti is held at 7:00 PM."
+    assert "conversationId" in data and data["conversationId"] is not None
 
 
 def test_post_api_chat_validation_missing_temple_id(client: TestClient) -> None:

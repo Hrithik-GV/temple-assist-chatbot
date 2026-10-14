@@ -47,6 +47,7 @@ class RAGService(BaseService):
         top_k: Optional[int] = None,
         similarity_threshold: Optional[float] = None,
         category: Optional[str] = None,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
     ) -> RAGAnswerResponse:
         """Execute end-to-end RAG question answering for a specific temple.
 
@@ -55,7 +56,7 @@ class RAGService(BaseService):
         2. Semantic vector search strictly filtered by templeId.
         3. Relevance filtering using similarity threshold.
         4. Context assembly and citation compilation.
-        5. LLM prompt synthesis with strict grounding instructions.
+        5. LLM prompt synthesis with strict grounding instructions and conversation history.
         6. Completion generation and response shaping.
 
         Args:
@@ -64,6 +65,7 @@ class RAGService(BaseService):
             top_k: Number of candidate chunks to retrieve.
             similarity_threshold: Minimum cosine similarity score (0.0 to 1.0).
             category: Optional category filter (e.g. 'rituals', 'history').
+            conversation_history: Optional list of recent dialogue messages for multi-turn context.
 
         Returns:
             RAGAnswerResponse: Structured answer with attribution sources and metadata.
@@ -98,6 +100,22 @@ class RAGService(BaseService):
             min_score=threshold,
         )
 
+        # Contextual query fallback: if short follow-up query yields 0 results, retry with prior user question
+        if not search_results and conversation_history:
+            last_user_query = next(
+                (m["content"] for m in reversed(conversation_history) if m.get("role") == "user" and m.get("content")),
+                None,
+            )
+            if last_user_query and last_user_query != clean_question:
+                self.logger.info("Retrying semantic search with combined context: '%.50s %.50s'", last_user_query, clean_question)
+                search_results = await self._vector_service.search(
+                    temple_id=clean_temple_id,
+                    query=f"{last_user_query} {clean_question}",
+                    top_k=limit,
+                    category=category,
+                    min_score=threshold,
+                )
+
         # 3. Context & Citations Construction
         context_str, citations = self.build_context_and_citations(search_results)
         has_context = len(citations) > 0
@@ -131,7 +149,7 @@ class RAGService(BaseService):
 
         # 5. Build System & User Prompts
         system_prompt = self.build_system_prompt()
-        user_prompt = self.build_user_prompt(clean_question, context_str)
+        user_prompt = self.build_user_prompt(clean_question, context_str, conversation_history)
 
         # 6. Generate Grounded LLM Response
         llm_resp = await self._llm_service.generate_answer(
@@ -161,15 +179,30 @@ class RAGService(BaseService):
         """Construct the strict system prompt for grounding temple responses."""
         return SYSTEM_PROMPT_TEMPLATE
 
-    def build_user_prompt(self, question: str, context: str) -> str:
-        """Assemble the user prompt containing context blocks and devotee question."""
-        return f"""TEMPLE CONTEXT:
-{context}
+    def build_user_prompt(
+        self,
+        question: str,
+        context: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """Assemble the user prompt containing context blocks, conversation history, and devotee question."""
+        prompt_parts: List[str] = [
+            f"TEMPLE CONTEXT:\n{context}",
+        ]
 
-DEVOTEE QUESTION:
-{question}
+        if conversation_history:
+            history_lines: List[str] = []
+            for msg in conversation_history:
+                role = msg.get("role", "user")
+                role_label = "Devotee" if role == "user" else "Assistant"
+                content = (msg.get("content") or "").strip()
+                if content:
+                    history_lines.append(f"{role_label}: {content}")
+            if history_lines:
+                prompt_parts.append("RECENT CONVERSATION HISTORY:\n" + "\n".join(history_lines))
 
-ANSWER:"""
+        prompt_parts.append(f"DEVOTEE QUESTION:\n{question}\n\nANSWER:")
+        return "\n\n".join(prompt_parts)
 
     def build_context_and_citations(
         self,

@@ -8,6 +8,7 @@ from app.core.errors import AppException, BadRequestException, NotFoundException
 from app.core.logging import get_logger
 from app.core.rate_limiter import RateLimiter
 from app.models.chat import ChatRequest, ChatResponse, ChatSource
+from app.services.conversation_service import conversation_service
 from app.services.database_service import database_service
 from app.services.rag_service import rag_service
 
@@ -73,13 +74,29 @@ async def public_chat(request: ChatRequest) -> ChatResponse:
         raise BadRequestException("Message cannot be empty or blank whitespace.")
 
     try:
-        # 3. Query RAG service with strict temple scoping
+        # 3. Resolve conversation session (enforces strict temple tenancy isolation)
+        conv = await conversation_service.get_or_create_conversation(
+            temple_id=temple_id,
+            conversation_id=request.conversation_id,
+            session_id=request.session_id,
+        )
+        active_conv_id = str(conv.get("conversationId") or conv.get("_id"))
+        active_sess_id = conv.get("sessionId") or request.session_id
+
+        # 4. Load recent conversation history if available
+        history = await conversation_service.load_recent_history(
+            temple_id=temple_id,
+            conversation_id=active_conv_id,
+        )
+
+        # 5. Query RAG service with strict temple scoping and multi-turn context
         rag_result = await rag_service.answer_question(
             temple_id=temple_id,
             question=clean_message,
+            conversation_history=history,
         )
 
-        # 4. Map citations to clean public chat source schemas
+        # 6. Map citations to clean public chat source schemas
         sources: List[ChatSource] = [
             ChatSource(
                 title=cit.title,
@@ -91,12 +108,27 @@ async def public_chat(request: ChatRequest) -> ChatResponse:
             for cit in rag_result.sources
         ]
 
-        # 5. Return sanitized public response
+        # 7. Persist dialogue messages with PII redaction and retention timestamps
+        await conversation_service.store_user_message(
+            temple_id=temple_id,
+            conversation_id=active_conv_id,
+            content=clean_message,
+        )
+        sources_dicts = [src.model_dump(by_alias=True) for src in sources]
+        await conversation_service.store_assistant_message(
+            temple_id=temple_id,
+            conversation_id=active_conv_id,
+            content=rag_result.answer,
+            sources=sources_dicts,
+        )
+
+        # 8. Return sanitized public response with conversationId for multi-turn continuity
         return ChatResponse(
             answer=rag_result.answer,
             sources=sources,
             templeId=temple_id,
-            sessionId=request.session_id,
+            conversationId=active_conv_id,
+            sessionId=active_sess_id,
             hasRelevantContext=rag_result.has_relevant_context,
         )
 
