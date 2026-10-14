@@ -102,10 +102,36 @@ class KnowledgeTextCreateRequest(BaseModel):
 
 
 class CrawlTriggerRequest(BaseModel):
-    """Payload to trigger asynchronous website ingestion for a temple."""
+    """Payload to trigger website ingestion for a temple."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     start_url: str = Field(..., alias="startUrl", description="Starting URL to crawl")
     max_pages: Optional[int] = Field(default=10, alias="maxPages", ge=1, le=50)
     max_depth: Optional[int] = Field(default=2, alias="maxDepth", ge=1, le=5)
+    category: Optional[str] = Field(default="website", description="Category for discovered pages")
+
+
+class FAQUpdateRequest(BaseModel):
+    """Admin payload to update an existing FAQ."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    question: Optional[str] = Field(default=None, min_length=3, max_length=500, description="Updated question")
+    answer: Optional[str] = Field(default=None, min_length=3, max_length=2000, description="Updated answer")
+    category: Optional[str] = Field(default=None, description="Updated category")
+
+
+class FAQResponse(BaseModel):
+    """Representation of an FAQ entry."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(..., description="FAQ document identifier")
+    temple_id: str = Field(..., alias="templeId", description="Associated temple ID")
+    question: str = Field(..., description="Devotee question")
+    answer: str = Field(..., description="Verified temple answer")
+    category: Optional[str] = Field(default="faq", description="Category")
+    chunk_count: int = Field(default=1, alias="chunkCount", description="Number of vector chunks")
+    created_at: Optional[datetime] = Field(default=None, alias="createdAt")
+    updated_at: Optional[datetime] = Field(default=None, alias="updatedAt")

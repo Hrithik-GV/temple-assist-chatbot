@@ -575,17 +575,27 @@ All endpoints require `Authorization: Bearer <token>` and enforce `RequireTemple
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/admin/knowledge/{templeId}/documents` | List all ingested documents, their status (`processed`, `failed`), and chunk counts |
+| `POST` | `/api/v1/admin/knowledge/{templeId}/upload` | Upload PDF, DOCX, or TXT file (`multipart/form-data`) for instant vector ingestion |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/documents` | List ingested documents with filters (`sourceType`, `status`, `category`, `search`, pagination) |
 | `GET` | `/api/v1/admin/knowledge/{templeId}/documents/{documentId}` | View document details and its indexed vector chunks |
 | `DELETE` | `/api/v1/admin/knowledge/{templeId}/documents/{documentId}` | Delete document and purge all associated vector chunks from search |
-| `POST` | `/api/v1/admin/knowledge/{templeId}/upload` | Upload PDF, DOCX, or TXT file (`multipart/form-data`) for instant vector ingestion |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/chunks` | Inspect indexed vector chunks across documents for a temple |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/chunks/{chunkId}` | View details and content of a single vector chunk |
 | `POST` | `/api/v1/admin/knowledge/{templeId}/faq` | Add verified Question & Answer pair into the knowledge base |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/faqs` | List all verified FAQs with question/answer formatting and category filters |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/faqs/{faqId}` | Retrieve a single FAQ entry |
+| `PUT` | `/api/v1/admin/knowledge/{templeId}/faqs/{faqId}` | Update FAQ question, answer, or category and re-index vector chunks |
+| `DELETE` | `/api/v1/admin/knowledge/{templeId}/faqs/{faqId}` | Delete FAQ entry and cascade-purge its vector chunks |
 | `POST` | `/api/v1/admin/knowledge/{templeId}/text` | Ingest raw text knowledge (e.g. guidelines, history, seva list) |
 | `POST` | `/api/v1/admin/knowledge/{templeId}/crawl` | Trigger Playwright crawler to scrape and index a temple website |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/crawl/status` | View latest crawl status, total crawls, and crawl history |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/crawl/{crawlId}` | View full page-by-page results, status, and error logs of a specific crawl job |
 | `GET` | `/api/v1/admin/knowledge/{templeId}/unanswered` | View devotee inquiries that triggered fallback responses (gaps in knowledge base) |
+| `GET` | `/api/v1/admin/knowledge/{templeId}/analytics` | Get chatbot traffic, message volume, fallback rate, document sources, and crawl metrics |
 
-#### Example: Ingesting a Verified FAQ (`POST /api/v1/admin/knowledge/{templeId}/faq`)
+#### Example: Ingesting & Updating a Verified FAQ
 ```bash
+# Add FAQ
 curl -X POST "http://localhost:8000/api/v1/admin/knowledge/somnath-01/faq" \
   -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
@@ -594,6 +604,18 @@ curl -X POST "http://localhost:8000/api/v1/admin/knowledge/somnath-01/faq" \
     "answer": "Special Abhishek pooja is 500 rupees per devotee and includes sanctum entry.",
     "category": "rituals"
   }'
+
+# Update FAQ (automatically updates vectors)
+curl -X PUT "http://localhost:8000/api/v1/admin/knowledge/somnath-01/faqs/<FAQ_ID>" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "answer": "Special Abhishek pooja is 600 rupees per devotee from November 2026."
+  }'
+
+# List FAQs
+curl -X GET "http://localhost:8000/api/v1/admin/knowledge/somnath-01/faqs?category=rituals" \
+  -H "Authorization: Bearer <TOKEN>"
 ```
 
 #### Example: Uploading a Knowledge Document File
@@ -603,6 +625,67 @@ curl -X POST "http://localhost:8000/api/v1/admin/knowledge/somnath-01/upload" \
   -F "file=@darshan_rules.pdf" \
   -F "title=Official Darshan Guidelines 2026" \
   -F "category=darshan"
+```
+
+#### Example: Triggering & Monitoring Website Crawling
+```bash
+# Trigger Crawl
+curl -X POST "http://localhost:8000/api/v1/admin/knowledge/somnath-01/crawl" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "startUrl": "https://somnath.org",
+    "maxPages": 15,
+    "maxDepth": 3
+  }'
+
+# Check Crawl Status & Recent Jobs
+curl -X GET "http://localhost:8000/api/v1/admin/knowledge/somnath-01/crawl/status" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+#### Example: Temple Chatbot Analytics
+```bash
+curl -X GET "http://localhost:8000/api/v1/admin/knowledge/somnath-01/analytics" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+Response:
+```json
+{
+  "templeId": "somnath-01",
+  "overview": {
+    "totalConversations": 142,
+    "activeConversations": 128,
+    "totalMessages": 684,
+    "userQueries": 342,
+    "assistantResponses": 342,
+    "unansweredQueries": 18,
+    "fallbackRatePercentage": 5.26,
+    "totalKnowledgeDocuments": 35,
+    "totalKnowledgeChunks": 210,
+    "totalCrawls": 4,
+    "lastCrawlAt": "2026-10-14T08:30:00Z"
+  },
+  "documentsBySourceType": {
+    "pdf": 12,
+    "website": 15,
+    "faq": 6,
+    "text": 2
+  },
+  "documentsByCategory": {
+    "rituals": 14,
+    "timings": 8,
+    "history": 7,
+    "general": 6
+  },
+  "recentQuestions": [
+    {
+      "question": "What time does the evening aarti begin?",
+      "conversationId": "conv_93f8...",
+      "askedAt": "2026-10-14T11:45:00Z"
+    }
+  ]
+}
 ```
 
 ---
@@ -716,7 +799,7 @@ Execute the automated test suite with `pytest`:
 pytest -v
 ```
 
-All 121 unit and integration tests cover:
+All 137 unit and integration tests cover:
 - FastAPI lifecycle, CORS, and health check diagnostic endpoints.
 - Multi-temple MongoDB data models, compound indexes, and tenancy scoping.
 - Document text extraction for PDF, DOCX, and TXT files.
@@ -755,7 +838,12 @@ All 121 unit and integration tests cover:
 - Admin authentication login (`POST /api/v1/admin/auth/login`) and current profile (`GET /api/v1/admin/auth/me`).
 - Strict temple-level multi-tenant authorization (`RequireTempleAccess`): blocking cross-temple access with `403 Forbidden`.
 - Superadmin privileges vs temple-scoped admin role barriers.
-- Protected document listing, deletion, verified FAQ ingestion, raw text ingestion, and website crawl triggering.
+- Document upload, listing with filters (`sourceType`, `status`, `category`, `search`), and cascade deletion.
+- Inspection of document metadata, indexed chunks, and single chunk retrieval.
+- Full FAQ lifecycle: Add, List, Get, Update (with vector re-indexing), and Delete.
+- Headless website crawling with crawl job tracking, duration, and status inspection (`/crawl/status`, `/crawl/{crawlId}`).
+- Querying unanswered devotee questions triggered by no-context fallbacks.
+- Comprehensive chatbot analytics (conversation counts, query volume, fallback rate, document sources, crawl stats).
 
 ---
 

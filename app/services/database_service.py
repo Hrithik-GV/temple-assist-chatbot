@@ -50,6 +50,11 @@ class DatabaseService(BaseService):
         """Collection handle for dialogue messages."""
         return self._db_manager.get_collection(Collections.MESSAGES)
 
+    @property
+    def crawl_jobs_collection(self) -> AsyncIOMotorCollection:
+        """Collection handle for website crawl jobs."""
+        return self._db_manager.get_collection(Collections.CRAWL_JOBS)
+
     # Multi-Temple Repository Operations
     async def get_temple_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         """Retrieve a temple by its unique slug."""

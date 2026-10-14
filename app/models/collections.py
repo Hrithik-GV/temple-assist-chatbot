@@ -10,3 +10,4 @@ class Collections:
     ADMINS = "admins"
     CONVERSATIONS = "conversations"
     MESSAGES = "messages"
+    CRAWL_JOBS = "crawl_jobs"
