@@ -28,7 +28,8 @@ temple-assist-chatbot/
 │   │       ├── router.py     # Aggregated v1 API router
 │   │       └── endpoints/
 │   │           ├── __init__.py
-│   │           └── health.py # Health, liveness, and readiness endpoints
+│   │           ├── health.py # Health, liveness, and readiness endpoints
+│   │           └── rag.py    # RAG question-answering query endpoint
 │   ├── core/                 # Core system configurations & foundations
 │   │   ├── __init__.py
 │   │   ├── config.py         # Pydantic Settings management (.env loader)
@@ -43,6 +44,7 @@ temple-assist-chatbot/
 │   │   ├── health.py         # Health check schemas & component models
 │   │   ├── temple.py         # Temple profile, timings, location, and contact models
 │   │   ├── knowledge.py      # KnowledgeDocument, KnowledgeChunk, VectorSearchResult, IngestionResult
+│   │   ├── rag.py            # RAGQueryRequest, RAGAnswerResponse, RAGSourceCitation, LLMResponse
 │   │   ├── admin.py          # Admin model with role-based and temple scoping
 │   │   ├── conversation.py   # Multi-turn chat session model (templeId-scoped)
 │   │   └── message.py        # Dialogue message history model (templeId-scoped)
@@ -54,6 +56,8 @@ temple-assist-chatbot/
 │   │   ├── embedding_service.py  # Swappable embedding provider (FastEmbed, Mock, etc.)
 │   │   ├── health_service.py     # Health inspection & MongoDB diagnostic service
 │   │   ├── ingestion_service.py  # Document ingestion pipeline (PDF, DOCX, TXT)
+│   │   ├── llm_service.py        # Swappable LLM completion provider (Gemini, OpenAI, Mock)
+│   │   ├── rag_service.py        # Dedicated RAG orchestration & grounded QA pipeline
 │   │   └── vector_search_service.py # Isolated MongoDB Atlas Vector Search service
 │   └── utils/                # Utility helpers & shared functions
 │       ├── __init__.py
@@ -70,6 +74,7 @@ temple-assist-chatbot/
     ├── test_database.py      # MongoDB models, manager, and multi-tenancy tests
     ├── test_health.py        # Health, probe, and database readiness tests
     ├── test_ingestion.py     # Document extraction, cleaning, chunking, and ingestion tests
+    ├── test_rag.py           # RAG retrieval, context, anti-hallucination, prompts & LLM tests
     └── test_vector_search.py # Embedding generation, chunk schema, and vector search tests
 ```
 
@@ -303,6 +308,94 @@ Create a Search Index on the `knowledge_chunks` collection using the **JSON Edit
 
 ---
 
+## RAG Question-Answering Service
+
+The RAG (Retrieval-Augmented Generation) pipeline connects the vector search foundation with LLM answer synthesis to provide grounded, hallucination-free answers to devotees.
+
+```text
+User Question ("What time is Morning Aarti?")
+  ├── 1. Generate Query Vector   (FastEmbed 384-dimensional dense vector)
+  ├── 2. Vector Search           (MongoDB Atlas $vectorSearch filtered strictly by templeId)
+  ├── 3. Relevance Gate          (Filter candidate chunks by similarity threshold)
+  ├── 4. Context Synthesis       (Assemble clean context blocks with citation provenance)
+  ├── 5. Grounded Prompting      (Strict anti-hallucination system prompt)
+  ├── 6. LLM Completion         (Swappable provider: Gemini, OpenAI, Mock)
+  └── 7. Response Output         (Grounded answer, source citations, latency & metadata)
+```
+
+### Strict Grounding & Anti-Hallucination Policy
+- **Verified Facts Only**: The LLM is strictly instructed to only answer using facts from the provided temple context and forbidden from guessing or extrapolating facts.
+- **Authoritative Fallback**: If no chunks meet the relevance threshold, the system immediately returns a respectful refusal without invoking the LLM, eliminating hallucination and saving latency/cost:
+  > *"I apologize, but this information is not available in the current temple records. Please consult the temple administration office or the official inquiry counter for assistance."*
+- **Source Attribution**: Every response includes chunk-level citations (title, origin document/URL, category, similarity score, and content snippet).
+- **API Key Security**: Backend communicates with the LLM provider directly; API keys are never exposed to clients.
+
+### RAG API Query (`POST /api/v1/rag/query`)
+
+#### Request:
+```json
+{
+  "templeId": "temple_somnath",
+  "question": "What are the morning darshan and aarti timings?",
+  "topK": 5,
+  "similarityThreshold": 0.4,
+  "category": "timings"
+}
+```
+
+#### Response:
+```json
+{
+  "answer": "According to the temple records, the temple opens for devotees daily at 6:00 AM and Morning Aarti takes place at 7:00 AM.",
+  "templeId": "temple_somnath",
+  "question": "What are the morning darshan and aarti timings?",
+  "sources": [
+    {
+      "title": "Somnath Darshan Timings",
+      "source": "somnath_timings.pdf",
+      "sourceUrl": "https://somnath.org/darshan-timings",
+      "category": "timings",
+      "chunkIndex": 0,
+      "score": 0.8921,
+      "contentSnippet": "The temple opens for devotees daily at 6:00 AM and closes at 10:00 PM. Morning Aarti is held at 7:00 AM...",
+      "documentId": "doc_somnath_darshan"
+    }
+  ],
+  "hasRelevantContext": true,
+  "topScore": 0.8921,
+  "latencyMs": 420.5,
+  "metadata": {
+    "chunksRetrieved": 1,
+    "thresholdUsed": 0.4,
+    "model": "gemini-1.5-flash"
+  }
+}
+```
+
+### Programmatic Python Usage
+
+```python
+import asyncio
+from app.services.rag_service import rag_service
+
+async def main():
+    response = await rag_service.answer_question(
+        temple_id="temple_somnath",
+        question="When does the sound and light show start?",
+        top_k=5,
+        similarity_threshold=0.4,
+    )
+
+    print(f"Answer: {response.answer}")
+    print(f"Grounded by {len(response.sources)} source(s):")
+    for src in response.sources:
+        print(f" - [{src.score:.2f}] {src.title} ({src.source})")
+
+asyncio.run(main())
+```
+
+---
+
 ## Multi-Temple Database Collections
 
 | Collection | Model | Description | Mandatory Scope |
@@ -377,6 +470,13 @@ cp .env.example .env
 | `CRAWLER_PAGE_TIMEOUT_MS` | Per-page navigation timeout in milliseconds | `30000` |
 | `CRAWLER_WAIT_AFTER_LOAD_MS`| Wait time after load for dynamic JS/React render | `1000` |
 | `CRAWLER_USER_AGENT` | Custom User-Agent header for Playwright crawler | `TempleAssistCrawler/1.0` |
+| `LLM_PROVIDER` | Selected LLM provider (`gemini`, `openai`, `mock`) | `gemini` |
+| `GEMINI_API_KEY` | Google Gemini API key | `None` |
+| `GEMINI_MODEL` | Google Gemini model name | `gemini-1.5-flash` |
+| `OPENAI_API_KEY` | OpenAI API key (if using OpenAI provider) | `None` |
+| `OPENAI_MODEL` | OpenAI model name | `gpt-4o-mini` |
+| `LLM_TEMPERATURE` | Generation temperature (lower = more grounded) | `0.2` |
+| `RAG_DEFAULT_SIMILARITY_THRESHOLD` | Cosine similarity cutoff threshold for retrieval | `0.4` |
 
 ---
 
@@ -400,7 +500,7 @@ Execute the automated test suite with `pytest`:
 pytest -v
 ```
 
-All 63 unit and integration tests cover:
+All 77 unit and integration tests cover:
 - FastAPI lifecycle, CORS, and health check diagnostic endpoints.
 - Multi-temple MongoDB data models, compound indexes, and tenancy scoping.
 - Document text extraction for PDF, DOCX, and TXT files.
@@ -416,11 +516,18 @@ All 63 unit and integration tests cover:
 - Local FastEmbed dense vector generation (384 dimensions).
 - Swappable embedding provider interface and mock providers.
 - Atlas `$vectorSearch` aggregation pipeline construction and multi-tenant filtering.
+- RAG question-answering retrieval filtered strictly by `templeId`.
+- Relevance similarity threshold gating and custom `top_k` retrieval.
+- Context synthesis, structured source citations, and snippet generation.
+- Anti-hallucination system prompt construction and grounding guardrails.
+- Authoritative no-context fallback responses when information is absent.
+- Swappable LLM provider interface (`GeminiLLMProvider`, `OpenAILLMProvider`, `MockLLMProvider`).
+- `/api/v1/rag/query` HTTP endpoint validation and execution.
 
 ---
 
 ## Roadmap (Next Phases)
 
-- **Phase 5: RAG Context Assembly & Prompt Formatting**: Context retrieval, relevance reranking, and citation grounding.
-- **Phase 6: Conversational Chat API**: Multi-turn dialogue management, streaming responses, and telemetry.
+- **Phase 6: Conversational Chat API**: Multi-turn dialogue management, session storage in `conversations`/`messages`, streaming responses, and telemetry.
 - **Phase 7: Admin API & Authentication**: JWT authentication, temple admin management, and document upload endpoints.
+- **Phase 8: Web Embeddable Chat Widget**: Lightweight devotee chat widget.

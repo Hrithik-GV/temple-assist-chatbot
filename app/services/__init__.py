@@ -12,6 +12,15 @@ from app.services.embedding_service import (
 from app.services.crawler_service import WebsiteCrawlerService, crawler_service
 from app.services.health_service import HealthService, health_service
 from app.services.ingestion_service import IngestionService, ingestion_service
+from app.services.llm_service import (
+    BaseLLMProvider,
+    GeminiLLMProvider,
+    LLMService,
+    MockLLMProvider,
+    OpenAILLMProvider,
+    llm_service,
+)
+from app.services.rag_service import RAGService, rag_service
 from app.services.vector_search_service import VectorSearchService, vector_search_service
 
 __all__ = [
@@ -31,4 +40,12 @@ __all__ = [
     "ingestion_service",
     "WebsiteCrawlerService",
     "crawler_service",
+    "BaseLLMProvider",
+    "GeminiLLMProvider",
+    "OpenAILLMProvider",
+    "MockLLMProvider",
+    "LLMService",
+    "llm_service",
+    "RAGService",
+    "rag_service",
 ]

@@ -1,7 +1,7 @@
 """Application configuration settings management using Pydantic Settings."""
 
 import json
-from typing import List, Union
+from typing import List, Optional, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -56,6 +56,20 @@ class Settings(BaseSettings):
     CRAWLER_PAGE_TIMEOUT_MS: int = 30000
     CRAWLER_WAIT_AFTER_LOAD_MS: int = 1000
     CRAWLER_USER_AGENT: str = "TempleAssistCrawler/1.0"
+
+    # LLM & RAG Configuration
+    LLM_PROVIDER: str = "gemini"  # "gemini", "openai", or "mock"
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-1.5-flash"
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_BASE_URL: Optional[str] = None
+    LLM_TEMPERATURE: float = 0.2
+    LLM_MAX_OUTPUT_TOKENS: int = 1024
+    LLM_REQUEST_TIMEOUT_SECONDS: float = 30.0
+    RAG_DEFAULT_SIMILARITY_THRESHOLD: float = 0.4
+    RAG_DEFAULT_TOP_K: int = 5
+    RAG_MAX_CONTEXT_CHUNKS: int = 8
 
     # CORS
     CORS_ORIGINS: Union[str, List[str]] = [
