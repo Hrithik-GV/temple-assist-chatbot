@@ -1,0 +1,55 @@
+{
+  "name": "temple-chatbot",
+  "version": "0.1.0",
+  "description": "Standalone, reusable React chatbot widget for Temple Assist multi-temple AI platform",
+  "type": "module",
+  "main": "./dist/temple-chatbot.umd.js",
+  "module": "./dist/temple-chatbot.es.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/temple-chatbot.es.js",
+      "require": "./dist/temple-chatbot.umd.js"
+    },
+    "./style.css": "./dist/temple-chatbot.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:lib": "cross-env BUILD_MODE=lib vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "cross-env": "^7.0.3",
+    "oxlint": "^1.81.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "vite-plugin-dts": "^5.1.2"
+  },
+  "keywords": [
+    "react",
+    "chatbot",
+    "temple",
+    "temple-assist",
+    "widget",
+    "rag",
+    "fastapi"
+  ],
+  "author": "Temple Assist Team",
+  "license": "MIT"
+}
