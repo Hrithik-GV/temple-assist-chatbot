@@ -7,6 +7,7 @@ export interface SendMessageOptions {
   conversationId?: string | null;
   sessionId?: string | null;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 /**
@@ -19,6 +20,7 @@ export async function sendChatMessage({
   conversationId = null,
   sessionId = null,
   signal,
+  timeoutMs = 30000,
 }: SendMessageOptions): Promise<ChatResponsePayload> {
   const cleanMessage = (message || '').trim();
   if (!cleanMessage) {
@@ -41,6 +43,28 @@ export async function sendChatMessage({
     sessionId: sessionId || null,
   };
 
+  // Internal abort controller combining caller signal + timeout
+  const internalController = new AbortController();
+  let isTimedOut = false;
+
+  const timeoutTimer = setTimeout(() => {
+    isTimedOut = true;
+    internalController.abort();
+  }, timeoutMs);
+
+  const onCallerAbort = () => {
+    internalController.abort();
+  };
+
+  if (signal) {
+    if (signal.aborted) {
+      clearTimeout(timeoutTimer);
+      internalController.abort();
+    } else {
+      signal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+  }
+
   let response: Response;
   try {
     response = await fetch(endpoint, {
@@ -50,13 +74,21 @@ export async function sendChatMessage({
         Accept: 'application/json',
       },
       body: JSON.stringify(payload),
-      signal,
+      signal: internalController.signal,
     });
   } catch (err: unknown) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    if (isTimedOut) {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds. Please try again.`);
+    }
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
       throw new Error('Request was cancelled.');
     }
     throw new Error('Unable to connect to Temple Assist. Please verify the backend service is running.');
+  } finally {
+    clearTimeout(timeoutTimer);
+    if (signal) {
+      signal.removeEventListener('abort', onCallerAbort);
+    }
   }
 
   const contentType = response.headers.get('content-type') || '';
@@ -72,11 +104,19 @@ export async function sendChatMessage({
 
   if (!response.ok) {
     // Extract standardized backend error envelope
+    let detailMsg = '';
+    if (Array.isArray(data?.error?.details) && data.error.details.length > 0) {
+      detailMsg = data.error.details
+        .map((d: any) => d.msg || (typeof d === 'string' ? d : JSON.stringify(d)))
+        .join(', ');
+    }
+
+    const baseMsg = data?.error?.message || data?.detail || (typeof data?.error === 'string' ? data.error : null);
     const errorMsg =
-      data?.error?.message ||
-      data?.detail ||
-      (typeof data?.error === 'string' ? data.error : null) ||
-      `Server error: ${response.status} (${response.statusText})`;
+      detailMsg && baseMsg
+        ? `${baseMsg}: ${detailMsg}`
+        : detailMsg || baseMsg || `Server error: ${response.status} (${response.statusText})`;
+
     throw new Error(errorMsg);
   }
 

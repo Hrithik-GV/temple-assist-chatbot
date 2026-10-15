@@ -79,6 +79,15 @@ export const TempleChatbot: React.FC<TempleChatbotProps> = ({
     }
   }, [messages, conversationId, sessionId, storageKey]);
 
+  // Abort any active request on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
   const toggleOpen = useCallback(() => {
     setIsOpen((prev) => {
       const next = !prev;
